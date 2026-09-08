@@ -1,0 +1,22 @@
+schema: 1
+updated: "2026-09-08"
+
+# These are the release lines tested by Idarsi roles. They are not a public
+# requirement for role users.
+ansible:
+  min: "2.19.12"
+  current: "2.20.8"
+  next: "2.21.3"
+python:
+  min: "3.11"
+  current: "3.12"
+  next: "3.12"
+ansible_runner: "2.4.3"
+molecule: "26.8.0"
+molecule_podman: "26.7.15"
+collections:
+  ansible_posix: "2.2.2"
+  containers_podman: "1.20.2"
+  community_general: "13.4.0"
+ansible_builder: "3.1.1"
+base_image: "quay.io/rockylinux/rockylinux@sha256:ed654c694190a670bb5c33f68995b862214fc96ffbdca95e07a8935ba0a3717d"

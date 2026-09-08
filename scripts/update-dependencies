@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+versions="$repo_root/versions.yml"
+command -v yq >/dev/null || { printf 'yq is required to update dependency pins\n' >&2; exit 1; }
+ansible_runner=$(yq -r '.ansible_runner' "$versions")
+molecule=$(yq -r '.molecule' "$versions")
+molecule_podman=$(yq -r '.molecule_podman' "$versions")
+base_image=$(yq -r '.base_image' "$versions")
+ansible_posix=$(yq -r '.collections.ansible_posix' "$versions")
+containers_podman=$(yq -r '.collections.containers_podman' "$versions")
+community_general=$(yq -r '.collections.community_general' "$versions")
+for environment in ansible-min ansible-current ansible-next; do
+  core=$(yq -r ".ansible.${environment#ansible-}" "$versions")
+  file="$repo_root/environments/$environment/execution-environment.yml"
+  sed -i -E "s#name: \"quay.io/rockylinux/rockylinux@sha256:[^\"]+\"#name: \"$base_image\"#; s#ansible-core==[0-9.]+#ansible-core==$core#; s#ansible-runner==[0-9.]+#ansible-runner==$ansible_runner#" "$file"
+  sed -i -E "s/^ansible-runner==.*/ansible-runner==$ansible_runner/; s/^molecule==.*/molecule==$molecule/; s/^molecule-plugins\[podman\]==.*/molecule-plugins[podman]==$molecule_podman/" "$repo_root/environments/$environment/requirements.txt"
+  export ANSIBLE_POSIX="$ansible_posix" CONTAINERS_PODMAN="$containers_podman" COMMUNITY_GENERAL="$community_general"
+  yq -i '(.collections[] | select(.name == "ansible.posix").version) = strenv(ANSIBLE_POSIX)' "$repo_root/environments/$environment/requirements.yml"
+  yq -i '(.collections[] | select(.name == "containers.podman").version) = strenv(CONTAINERS_PODMAN)' "$repo_root/environments/$environment/requirements.yml"
+  yq -i '(.collections[] | select(.name == "community.general").version) = strenv(COMMUNITY_GENERAL)' "$repo_root/environments/$environment/requirements.yml"
+done
+printf 'Pins synchronized from %s. Review the diff and run make validate.\n' "$versions"

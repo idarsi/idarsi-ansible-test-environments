@@ -1,0 +1,4 @@
+git
+openssh-clients
+podman
+sshpass

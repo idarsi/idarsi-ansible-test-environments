@@ -1,0 +1,20 @@
+---
+version: 3
+images:
+  base_image:
+    name: "quay.io/rockylinux/rockylinux@sha256:ed654c694190a670bb5c33f68995b862214fc96ffbdca95e07a8935ba0a3717d"
+dependencies:
+  ansible_core:
+    package_pip: "ansible-core==2.21.3"
+  ansible_runner:
+    package_pip: "ansible-runner==2.4.3"
+  python_interpreter:
+    package_system: "python3.12"
+    python_path: "/usr/bin/python3.12"
+  python: requirements.txt
+  galaxy: requirements.yml
+  system: bindep.txt
+options:
+  package_manager_path: "/usr/bin/dnf"
+  user: "1000"
+  workdir: "/runner"

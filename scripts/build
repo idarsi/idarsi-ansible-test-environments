@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+engine=${CONTAINER_ENGINE:-podman}
+builder=${ANSIBLE_BUILDER:-ansible-builder}
+image=${IMAGE:-}
+
+usage() {
+  printf 'Usage: %s [--validate-only] <ansible-min|ansible-current|ansible-next>\n' "$0" >&2
+}
+
+validate_only=false
+if [[ ${1:-} == "--validate-only" ]]; then
+  validate_only=true
+  shift
+fi
+environment=${1:-}
+if [[ -z "$environment" || ! -d "$repo_root/environments/$environment" ]]; then
+  usage
+  exit 2
+fi
+
+definition="$repo_root/environments/$environment/execution-environment.yml"
+create_context() {
+  local destination=$1
+  if command -v "$builder" >/dev/null; then
+    "$builder" create --file "$definition" --context "$destination"
+    return
+  fi
+  command -v "$engine" >/dev/null || { printf 'ansible-builder or %s is required\n' "$engine" >&2; exit 1; }
+  "$engine" run --rm -v "$repo_root:/workspace:Z" -w /workspace \
+    docker.io/library/python:3.12-slim \
+    bash -lc 'python -m pip install --quiet ansible-builder==3.1.1 && ansible-builder create --file "$1" --context "$2"' \
+    bash "${definition#"$repo_root/"}" "${destination#"$repo_root/"}"
+}
+
+if "$validate_only"; then
+  create_context "$repo_root/.build-$environment"
+  rm -rf "$repo_root/.build-$environment"
+  exit 0
+fi
+command -v "$engine" >/dev/null || { printf '%s is required\n' "$engine" >&2; exit 1; }
+
+if [[ -z "$image" ]]; then
+  image="localhost/idarsi/ansible-test:$environment"
+fi
+context="$repo_root/.build-$environment"
+rm -rf "$context"
+create_context "$context"
+"$engine" build --pull=missing --tag "$image" "$context"
+"$engine" run --rm --entrypoint /usr/local/bin/ansible-playbook "$image" --version
+printf 'Built and smoke-tested %s\n' "$image"

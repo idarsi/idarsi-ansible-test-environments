@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+engine=${CONTAINER_ENGINE:-podman}
+environment=${1:-ansible-current}
+role_path=${2:-}
+shift 2 || true
+if [[ ${1:-} == "--" ]]; then shift; fi
+
+[[ -d "$repo_root/environments/$environment" ]] || { printf 'Unknown environment: %s\n' "$environment" >&2; exit 2; }
+[[ -n "$role_path" && -d "$role_path" ]] || { printf 'ROLE_PATH must point to a role repository\n' >&2; exit 2; }
+command -v "$engine" >/dev/null || { printf '%s is required\n' "$engine" >&2; exit 1; }
+image=${IMAGE:-"localhost/idarsi/ansible-test:$environment"}
+socket=${CONTAINER_HOST:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock}
+if [[ ! -S "$socket" ]]; then
+  printf 'Podman API socket not found: %s\nStart it with: podman system service --time=0 %s\n' "$socket" "$socket" >&2
+  exit 1
+fi
+
+role_path=$(cd "$role_path" && pwd)
+userns_args=()
+if [[ "$engine" == "podman" ]]; then
+  userns_args+=(--userns=keep-id)
+fi
+exec "$engine" run --rm --network host \
+  "${userns_args[@]}" \
+  --security-opt label=disable \
+  -e "CONTAINER_HOST=unix:///run/podman/podman.sock" \
+  -v "$role_path:/workspace:Z" \
+  -v "$socket:/run/podman/podman.sock" \
+  -w /workspace \
+  "$image" molecule "${@:-test}"
