@@ -30,6 +30,6 @@ jobs:
         run: make validate
       - name: Verify source pin is synchronized
         run: |
-          test "$(awk '/min:/{gsub(/[\"]/, "", $2); print $2}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print $2}' environments/ansible-min/execution-environment.yml)"
-          test "$(awk '/current:/{gsub(/[\"]/, "", $2); print $2}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print $2}' environments/ansible-current/execution-environment.yml)"
-          test "$(awk '/next:/{gsub(/[\"]/, "", $2); print $2}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print $2}' environments/ansible-next/execution-environment.yml)"
+          test "$(awk '/min:/{print substr($2, 2, length($2) - 2)}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print substr($2, 2, length($2) - 2)}' environments/ansible-min/execution-environment.yml)"
+          test "$(awk '/current:/{print substr($2, 2, length($2) - 2)}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print substr($2, 2, length($2) - 2)}' environments/ansible-current/execution-environment.yml)"
+          test "$(awk '/next:/{print substr($2, 2, length($2) - 2)}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print substr($2, 2, length($2) - 2)}' environments/ansible-next/execution-environment.yml)"
