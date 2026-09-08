@@ -30,10 +30,15 @@ jobs:
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/ansible-test:${{ matrix.environment }}
         run: scripts/build "${{ matrix.environment }}"
+      - name: Export image for scanning
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/ansible-test:${{ matrix.environment }}
+        run: podman save --output image.tar "$IMAGE"
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository_owner }}/ansible-test:${{ matrix.environment }}
+          input: image.tar
+          scan-type: image
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
