@@ -1,5 +1,8 @@
 # Idarsi Ansible Test Environments
 
+> **Maturity State: Beta**<br>
+> **RC Readiness: 84%**
+
 This repository provides reproducible Ansible Execution Environments for the
 Idarsi `ansible-iac-role-*` repositories. It centralizes controller-side
 tooling while leaving each role's Molecule scenarios in that role repository.
