@@ -36,14 +36,14 @@ jobs:
     continue-on-error: ${{ inputs.allow_failure }}
     steps:
       - name: Check out role
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           repository: ${{ inputs.role_repository || github.repository }}
           ref: ${{ inputs.role_ref || github.sha }}
           path: role
       - name: Check out test environment
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
           repository: idarsi/idarsi-ansible-test-environments
