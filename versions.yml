@@ -19,4 +19,5 @@ collections:
   containers_podman: "1.20.2"
   community_general: "13.4.0"
 ansible_builder: "3.1.1"
+builder_image: "docker.io/library/python:3.12-slim@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79"
 base_image: "quay.io/rockylinux/rockylinux@sha256:ed654c694190a670bb5c33f68995b862214fc96ffbdca95e07a8935ba0a3717d"

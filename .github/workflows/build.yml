@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
@@ -21,11 +20,13 @@ jobs:
         environment: [ansible-min, ansible-current, ansible-next]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install pinned Builder
-        run: python -m pip install --disable-pip-version-check ansible-builder==3.1.1
+        run: python -m pip install --disable-pip-version-check "ansible-builder==$(awk -F'\"' '/^ansible_builder:/{print $2}' versions.yml)"
       - name: Build and smoke-test image
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/ansible-test:${{ matrix.environment }}
@@ -43,18 +44,50 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
+      - name: Check image artifact integrity
+        run: sha256sum image.tar > image.tar.sha256 && sha256sum --check image.tar.sha256
+      - name: Export scanned image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.environment }}
+          path: |
+            image.tar
+            image.tar.sha256
+
+  publish:
+    name: Publish ${{ matrix.environment }}
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.ref_protected == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        environment: [ansible-min, ansible-current, ansible-next]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require a semantic version tag
+        shell: bash
+        run: '[[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.environment }}
+      - name: Load image
+        run: sha256sum --check image.tar.sha256 && podman load --input image.tar
       - name: Log in to GHCR
-        if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish immutable and convenience tags
-        if: startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
+      - name: Publish version and convenience tags
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/ansible-test:${{ matrix.environment }}
         run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           case "${{ matrix.environment }}" in
             ansible-min) core_version=$(awk '/^  min:/{gsub(/[\"]/, "", $2); print $2}' versions.yml) ;;
             ansible-current) core_version=$(awk '/^  current:/{gsub(/[\"]/, "", $2); print $2}' versions.yml) ;;

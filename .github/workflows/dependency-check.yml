@@ -19,17 +19,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install validation tools
-        run: python -m pip install --disable-pip-version-check ansible-builder==3.1.1 yamllint
+        run: python -m pip install --disable-pip-version-check "ansible-builder==$(awk -F'\"' '/^ansible_builder:/{print $2}' versions.yml)" yamllint
       - name: Validate YAML style
         run: yamllint .
       - name: Render all definitions
         run: make validate
       - name: Verify source pin is synchronized
-        run: |
-          test "$(awk '/^ansible:/{in_ansible=1; next} in_ansible && /^  min:/{print substr($2, 2, length($2) - 2); exit}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print substr($2, 1, length($2) - 1)}' environments/ansible-min/execution-environment.yml)"
-          test "$(awk '/^ansible:/{in_ansible=1; next} in_ansible && /^  current:/{print substr($2, 2, length($2) - 2); exit}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print substr($2, 1, length($2) - 1)}' environments/ansible-current/execution-environment.yml)"
-          test "$(awk '/^ansible:/{in_ansible=1; next} in_ansible && /^  next:/{print substr($2, 2, length($2) - 2); exit}' versions.yml)" = "$(awk -F'==' '/ansible-core/{print substr($2, 1, length($2) - 1)}' environments/ansible-next/execution-environment.yml)"
+        run: scripts/check-dependencies

@@ -34,11 +34,20 @@ wider range than this test matrix.
 
 ## Image Lifecycle
 
-Builds use `quay.io/rockylinux/rockylinux` by immutable digest. Published
-images use `ghcr.io/idarsi/ansible-test:<ansible-core-patch>` as the immutable
-release tag, plus `ansible-min`, `ansible-current`, and `ansible-next` aliases.
-Aliases are for convenience and may move. Release workflows should reference
-the patch tag or digest. `latest` is not used by release-critical tests.
+Builds use digest references for both the Rocky base and the temporary
+ansible-builder bootstrap image. Published images use
+`ghcr.io/idarsi/ansible-test:<ansible-core-patch>` as a version-labelled tag,
+plus `ansible-min`, `ansible-current`, and `ansible-next` aliases. Tags are
+mutable registry references, so release workflows should record and reference
+the resulting digest. `latest` is not used by release-critical tests.
 
-The central workflow builds, smoke-tests, and then pushes images. A failed
-smoke test prevents publication.
+The central workflow builds, smoke-tests, scans, and then pushes images. A
+failed build or Trivy scan prevents publication. The role test controller
+mounts a private rootless Podman socket into an ephemeral container. Role test
+code necessarily controls that API and can control containers on the runner;
+this is an unavoidable API trust boundary on ephemeral trusted runners, not a
+general-purpose sandbox. The wrapper requires the socket to be owned by the
+invoking user and to have mode 600 or 660, and the workflow waits for the
+service process and socket cleanup. These checks reduce accidental exposure;
+they do not make role code untrusted or remove the Podman API's control of the
+runner user's containers.

@@ -27,6 +27,9 @@ on:
         default: false
         type: boolean
 
+permissions:
+  contents: read
+
 jobs:
   molecule:
     runs-on: ubuntu-latest
@@ -35,12 +38,14 @@ jobs:
       - name: Check out role
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: ${{ inputs.role_repository || github.repository }}
           ref: ${{ inputs.role_ref || github.sha }}
           path: role
       - name: Check out test environment
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           repository: idarsi/idarsi-ansible-test-environments
           ref: ${{ inputs.test_environment_ref }}
           path: test-environment
@@ -48,20 +53,43 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install pinned Builder
-        run: python -m pip install --disable-pip-version-check ansible-builder==3.1.1
+        working-directory: test-environment
+        run: python -m pip install --disable-pip-version-check "ansible-builder==$(awk -F'\"' '/^ansible_builder:/{print $2; exit}' versions.yml)"
       - name: Build controller image
         working-directory: test-environment
         env:
+          ENVIRONMENT: ${{ inputs.environment }}
           IMAGE: localhost/idarsi/ansible-test:${{ inputs.environment }}
-        run: scripts/build "${{ inputs.environment }}"
+        run: scripts/build "$ENVIRONMENT"
       - name: Start Podman API
+        env:
+          PODMAN_SOCKET: ${{ runner.temp }}/idarsi-podman.sock
         run: |
-          podman system service --time=0 unix:///tmp/idarsi-podman.sock >/tmp/podman-service.log 2>&1 &
-          for attempt in $(seq 1 30); do test -S /tmp/idarsi-podman.sock && break; sleep 1; done
-          test -S /tmp/idarsi-podman.sock
+          podman system service --time=0 "unix://${PODMAN_SOCKET}" >"${RUNNER_TEMP}/podman-service.log" 2>&1 &
+          printf '%s\n' "$!" >"${RUNNER_TEMP}/podman-service.pid"
+          for attempt in $(seq 1 30); do test -S "$PODMAN_SOCKET" && break; sleep 1; done
+          test -S "$PODMAN_SOCKET"
+          test "$(stat -c '%u:%g' "$PODMAN_SOCKET")" = "$(id -u):$(id -g)"
+          case "$(stat -c '%a' "$PODMAN_SOCKET")" in 600|660) ;; *) exit 1 ;; esac
       - name: Run role Molecule scenario
         working-directory: test-environment
         env:
+          ENVIRONMENT: ${{ inputs.environment }}
           IMAGE: localhost/idarsi/ansible-test:${{ inputs.environment }}
-          CONTAINER_HOST: /tmp/idarsi-podman.sock
-        run: scripts/test "${{ inputs.environment }}" "$GITHUB_WORKSPACE/role" -- ${{ inputs.molecule_args }}
+          CONTAINER_HOST: ${{ runner.temp }}/idarsi-podman.sock
+          MOLECULE_ARGS: ${{ inputs.molecule_args }}
+        run: scripts/test "$ENVIRONMENT" "$GITHUB_WORKSPACE/role"
+      - name: Stop private Podman API
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/podman-service.pid" ]]; then
+            pid=$(cat "$RUNNER_TEMP/podman-service.pid")
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+            if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid"; fi
+            for attempt in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+            ! kill -0 "$pid" 2>/dev/null
+          fi
+          rm -f "$RUNNER_TEMP/idarsi-podman.sock" "$RUNNER_TEMP/podman-service.pid" "$RUNNER_TEMP/podman-service.log"
+          test ! -e "$RUNNER_TEMP/idarsi-podman.sock"

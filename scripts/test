@@ -2,6 +2,24 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ ${1:-} == "--parse-args" ]]; then
+  shift
+  [[ $# -eq 1 ]] || { printf 'Usage: %s --parse-args STRING\n' "$0" >&2; exit 2; }
+  PARSE_ARGS=$1 python3 -c '
+import os, re, shlex, sys
+try:
+    args = shlex.split(os.environ["PARSE_ARGS"], comments=False, posix=True)
+except ValueError as error:
+    print(f"Invalid MOLECULE_ARGS quoting: {error}", file=sys.stderr)
+    raise SystemExit(2)
+if any(re.search(r"[;&|<>$`()\x00\n\r]", arg) for arg in args):
+    print("MOLECULE_ARGS contains shell metacharacters", file=sys.stderr)
+    raise SystemExit(2)
+for arg in args:
+    sys.stdout.buffer.write(arg.encode() + b"\0")
+'
+  exit 0
+fi
 engine=${CONTAINER_ENGINE:-podman}
 environment=${1:-ansible-current}
 role_path=${2:-}
@@ -17,17 +35,54 @@ if [[ ! -S "$socket" ]]; then
   printf 'Podman API socket not found: %s\nStart it with: podman system service --time=0 %s\n' "$socket" "$socket" >&2
   exit 1
 fi
+[[ "$(stat -c '%u:%g' "$socket")" == "$(id -u):$(id -g)" ]] || {
+  printf 'Podman API socket must be owned by the invoking user: %s\n' "$socket" >&2
+  exit 1
+}
+case "$(stat -c '%a' "$socket")" in
+  600|660) ;;
+  *) printf 'Podman API socket must have mode 600 or 660\n' >&2; exit 1 ;;
+esac
 
 role_path=$(cd "$role_path" && pwd)
+if [[ $# -gt 0 && -v MOLECULE_ARGS ]]; then
+  printf 'Pass Molecule arguments either as MOLECULE_ARGS or positional arguments, not both\n' >&2
+  exit 2
+fi
+molecule_args=("$@")
+if [[ ${#molecule_args[@]} -eq 0 ]]; then
+  # Parse without shell evaluation and reject shell metacharacters. A
+  # temporary file preserves real NUL delimiters and propagates parser errors.
+  if [[ ! -v MOLECULE_ARGS ]]; then molecule_text=test; else molecule_text=$MOLECULE_ARGS; fi
+  [[ -n "$molecule_text" ]] || { printf 'MOLECULE_ARGS must not be empty\n' >&2; exit 2; }
+  parser_output=$(mktemp)
+  trap 'rm -f "$parser_output"' EXIT
+  MOLECULE_ARGS="$molecule_text" python3 -c '
+import os, re, shlex, sys
+try:
+    args = shlex.split(os.environ["MOLECULE_ARGS"], comments=False, posix=True)
+except ValueError as error:
+    print(f"Invalid MOLECULE_ARGS quoting: {error}", file=sys.stderr)
+    raise SystemExit(2)
+if any(re.search(r"[;&|<>$`()\x00\n\r]", arg) for arg in args):
+    print("MOLECULE_ARGS contains shell metacharacters", file=sys.stderr)
+    raise SystemExit(2)
+for arg in args:
+    sys.stdout.buffer.write(arg.encode() + b"\0")
+' >"$parser_output"
+  mapfile -d '' molecule_args <"$parser_output"
+fi
+[[ ${#molecule_args[@]} -gt 0 ]] || { printf 'MOLECULE_ARGS must not be empty\n' >&2; exit 2; }
 userns_args=()
 if [[ "$engine" == "podman" ]]; then
   userns_args+=(--userns=keep-id)
+  userns_args+=(--user "$(id -u):$(id -g)")
 fi
-exec "$engine" run --rm --network host \
+exec "$engine" run --rm --network slirp4netns \
   "${userns_args[@]}" \
-  --security-opt label=disable \
   -e "CONTAINER_HOST=unix:///run/podman/podman.sock" \
-  -v "$role_path:/workspace:Z" \
-  -v "$socket:/run/podman/podman.sock" \
+  -v "$role_path:/role:ro" \
+  -v "$socket:/run/podman/podman.sock:ro" \
   -w /workspace \
-  "$image" molecule "${@:-test}"
+  --tmpfs /workspace \
+  "$image" sh -c 'tar -C /role --exclude=.git -cf - . | tar -C /workspace -xf - && exec molecule "$@"' test "${molecule_args[@]}"

@@ -4,8 +4,9 @@ ENVIRONMENT ?= ansible-current
 IMAGE ?= localhost/idarsi/ansible-test:$(ENVIRONMENT)
 ROLE_PATH ?=
 MOLECULE_ARGS ?= test
+export MOLECULE_ARGS
 
-.PHONY: help build build-min build-current build-next validate test test-min test-current test-next update-dependencies
+.PHONY: help build build-min build-current build-next validate check-dependencies check-scripts test test-min test-current test-next update-dependencies
 
 help:
 	@printf '%s\n' \
@@ -27,12 +28,19 @@ build-next:
 	ENVIRONMENT=ansible-next IMAGE=$(IMAGE) scripts/build ansible-next
 
 validate:
+	@scripts/test-scripts
 	@for environment in ansible-min ansible-current ansible-next; do \
 		scripts/build --validate-only $$environment; \
 	done
 
+check-dependencies:
+	scripts/check-dependencies
+
+check-scripts:
+	scripts/test-scripts
+
 test:
-	IMAGE=$(IMAGE) scripts/test $(ENVIRONMENT) $(ROLE_PATH) -- $(MOLECULE_ARGS)
+	IMAGE=$(IMAGE) scripts/test $(ENVIRONMENT) $(ROLE_PATH)
 
 test-min:
 	ENVIRONMENT=ansible-min make test

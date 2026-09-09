@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         environment: [ansible-min, ansible-current, ansible-next]
-    uses: idarsi/idarsi-ansible-test-environments/.github/workflows/molecule-reusable.yml@v1
+      uses: idarsi/idarsi-ansible-test-environments/.github/workflows/molecule-reusable.yml@<reviewed-release-tag-or-commit-sha>
     with:
       environment: ${{ matrix.environment }}
       test_environment_ref: v1
@@ -24,8 +24,9 @@ jobs:
 ```
 
 The workflow builds the selected shared image in the runner, checks out the
-role, and invokes its existing Molecule scenario. Pin the reusable workflow to
-a reviewed release tag, or to a full commit SHA under a stricter policy.
+role, and invokes its existing Molecule scenario. For reproducible CI, replace
+the placeholder with a reviewed release tag or commit SHA. Do not use an
+unreviewed moving branch reference.
 
 Role-specific target matrices remain in the role workflow. For example, a
 role supporting Rocky 9 and 10 can add `target_image` to its matrix and pass it
@@ -43,3 +44,10 @@ collections:
 
 Do not add service-specific dependencies to the common image solely to make one
 role convenient.
+
+The central build workflow runs for `vX.Y.Z` tags, and only publishes when the
+semantic tag is protected (`github.ref_protected == true`). Repository tag
+protection must be enabled by maintainers; this document does not imply that
+repository settings are configured. Image version tags are derived from the
+Ansible versions in `versions.yml`, not from the release tag. Consumers should
+pin a published image digest for release-critical use.

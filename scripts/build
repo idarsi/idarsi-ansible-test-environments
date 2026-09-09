@@ -4,7 +4,21 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 engine=${CONTAINER_ENGINE:-podman}
 builder=${ANSIBLE_BUILDER:-ansible-builder}
+builder_version=$(awk -F'"' '/^ansible_builder:/{print $2; exit}' "$repo_root/versions.yml")
+[[ -n "$builder_version" ]] || { printf 'ansible_builder is missing from versions.yml\n' >&2; exit 1; }
+builder_image_line=$(awk '/^builder_image:/{print; exit}' "$repo_root/versions.yml")
+[[ -n "$builder_image_line" ]] || { printf 'builder_image is missing from versions.yml\n' >&2; exit 1; }
+[[ "$builder_image_line" =~ ^builder_image:\ \"([^\"]+)\"$ ]] || {
+  printf 'builder_image in versions.yml must be a quoted image reference\n' >&2
+  exit 1
+}
+builder_image_from_versions=${BASH_REMATCH[1]}
+[[ "$builder_image_from_versions" =~ ^[^[:space:]]+@sha256:[[:xdigit:]]{64}$ ]] || {
+  printf 'builder_image in versions.yml must be a digest-pinned image reference\n' >&2
+  exit 1
+}
 image=${IMAGE:-}
+builder_image=${BUILDER_IMAGE:-$builder_image_from_versions}
 
 usage() {
   printf 'Usage: %s [--validate-only] <ansible-min|ansible-current|ansible-next>\n' "$0" >&2
@@ -30,9 +44,9 @@ create_context() {
   fi
   command -v "$engine" >/dev/null || { printf 'ansible-builder or %s is required\n' "$engine" >&2; exit 1; }
   "$engine" run --rm -v "$repo_root:/workspace:Z" -w /workspace \
-    docker.io/library/python:3.12-slim \
-    bash -lc 'python -m pip install --quiet ansible-builder==3.1.1 && ansible-builder create --file "$1" --context "$2"' \
-    bash "${definition#"$repo_root/"}" "${destination#"$repo_root/"}"
+    "$builder_image" \
+    bash -lc 'python -m pip install --quiet "ansible-builder==$3" && ansible-builder create --file "$1" --context "$2"' \
+    bash "${definition#"$repo_root/"}" "${destination#"$repo_root/"}" "$builder_version"
 }
 
 if "$validate_only"; then

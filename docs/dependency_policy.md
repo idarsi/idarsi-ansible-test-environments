@@ -36,10 +36,10 @@ Dependabot opens updates for GitHub Actions and pip requirements. Collection,
 Ansible, and base-image updates remain manually reviewed because they can
 change module behavior or target compatibility.
 
-The host-side Builder bootstrap uses `ansible-builder==3.1.1` in a temporary
-Python 3.12 container when a developer does not already have Builder installed.
-This keeps local hosts free of a project Python stack; the bootstrap pin must be
-updated deliberately alongside `versions.yml`.
+The host-side Builder bootstrap uses the `ansible_builder` pin from
+`versions.yml` in a temporary Python 3.12 container when a developer does not
+already have Builder installed. This keeps local hosts free of a project Python
+stack; update the source pin deliberately in `versions.yml`.
 
 ## Security
 

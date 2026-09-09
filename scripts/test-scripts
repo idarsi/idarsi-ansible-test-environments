@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+for script in scripts/build scripts/check-dependencies scripts/test scripts/update-dependencies scripts/test-scripts; do
+  bash -n "$repo_root/$script"
+done
+
+cmp <(printf 'test\0-s\0validation\0') \
+  <("$repo_root/scripts/test" --parse-args 'test -s validation')
+if "$repo_root/scripts/test" --parse-args 'test;touch /tmp/not-run' >/dev/null 2>&1; then
+  printf 'Parser accepted shell metacharacters\n' >&2
+  exit 1
+fi
+if "$repo_root/scripts/test" --parse-args "test 'unterminated" >/dev/null 2>&1; then
+  printf 'Parser accepted malformed quoting\n' >&2
+  exit 1
+fi
+
+"$repo_root/scripts/check-dependencies"
+printf 'Script regression checks passed\n'

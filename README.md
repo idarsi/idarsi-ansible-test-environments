@@ -46,7 +46,10 @@ make test ROLE_PATH=/path/to/role ENVIRONMENT=ansible-min \
 
 `make validate` renders every Builder definition without building an image.
 The `scripts/test` wrapper mounts the role read-only and the host Podman
-socket; it does not require a project-local Python installation.
+socket; it does not require a project-local Python installation. If
+`MOLECULE_ARGS` is unset, the wrapper runs `test`; an explicitly empty value is
+rejected. Arguments are parsed without shell evaluation, and shell
+metacharacters or malformed quoting are rejected.
 
 ## Role Integration
 
@@ -67,19 +70,24 @@ this repository does not impose an OS matrix on roles.
 ## Builds and Publishing
 
 `make build-current` creates a local image named
-`localhost/idarsi/ansible-test:ansible-current`. Central CI publishes immutable
-release tags such as `ghcr.io/idarsi/ansible-test:2.20.8` and a convenience
-alias for the environment. Release-critical consumers should use a release
-tag or digest, not `latest` or a mutable convenience alias.
+`localhost/idarsi/ansible-test:ansible-current`. Central CI publishes
+version-labelled tags such as `ghcr.io/idarsi/ansible-test:2.20.8` and a
+convenience alias for the environment. Tags are mutable registry references;
+release-critical consumers should use a recorded image digest.
 
 Images are built from a digest-pinned Rocky Linux base. No credentials or
-secrets are copied into the image. CI smoke-tests Ansible before publishing.
+secrets are copied into the image. CI smoke-tests and scans Ansible before
+publishing. A `vX.Y.Z` tag is the release trigger; maintainers must enable
+protected-tag rules, and publishing is gated on the tag being protected. Image
+version tags are taken from `versions.yml`, not from `vX.Y.Z`. CI also verifies
+the exported image checksum between scanning and publishing.
 
 ## Dependency Updates
 
-Pins live in `versions.yml`, the three Builder definitions, Python requirement
-files, and Galaxy requirement files. `scripts/update-dependencies` synchronizes
-the generated pin locations after `versions.yml` is intentionally changed.
+`versions.yml` is authoritative for dependency pins. The update script
+synchronizes the three Builder definitions, Python requirement files, and
+Galaxy requirement files; `scripts/check-dependencies` verifies every generated
+location and is run by the dependency workflow.
 Every update is a reviewable pull request, followed by `make validate` and
 image smoke tests. Dependabot monitors GitHub Actions and pip dependencies;
 collection and base-image updates remain explicit because they need matrix

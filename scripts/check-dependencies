@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+versions="$repo_root/versions.yml"
+value() {
+  local key=${1##*.}
+  awk -F'"' -v key="$key" '$0 ~ "^ *" key ":" { print $2; exit }' "$versions"
+}
+python_value() {
+  local key=$1
+  awk -F'"' -v key="$key" '$0 == "python:" { in_python=1; next } in_python && $0 ~ "^  " key ":" { print $2; exit }' "$versions"
+}
+check_literal() {
+  local expected=$1 pattern=$2 file=$3 actual
+  actual=$(awk -v pattern="$pattern" '$0 ~ pattern { print; exit }' "$file")
+  [[ "$actual" == *"$expected"* ]] || { printf 'Pin mismatch: %s (%s)\n' "$file" "$pattern" >&2; exit 1; }
+}
+
+for environment in ansible-min ansible-current ansible-next; do
+  core=$(value "  ${environment#ansible-}")
+  definition="$repo_root/environments/$environment/execution-environment.yml"
+  check_literal "ansible-core==$core" 'ansible-core==' "$definition"
+  python_version=$(python_value "${environment#ansible-}")
+  check_literal "package_system: \"python$python_version\"" 'package_system:' "$definition"
+  check_literal "python_path: \"/usr/bin/python$python_version\"" 'python_path:' "$definition"
+  check_literal "ansible-runner==$(value ansible_runner)" 'ansible-runner==' "$definition"
+  check_literal "$(value base_image)" 'name: .*@sha256:' "$definition"
+  check_literal "ansible-runner==$(value ansible_runner)" '^ansible-runner==' "$repo_root/environments/$environment/requirements.txt"
+  check_literal "molecule==$(value molecule)" '^molecule==' "$repo_root/environments/$environment/requirements.txt"
+  check_literal "molecule-plugins[podman]==$(value molecule_podman)" '^molecule-plugins' "$repo_root/environments/$environment/requirements.txt"
+  for collection in ansible_posix containers_podman community_general; do
+    name=${collection//_/.}
+    [[ "$name" == "containers.podman" ]] && name=containers.podman
+    expected=$(value "collections.$collection")
+    awk -v name="$name" -v expected="$expected" '
+      $0 == "  - name: \"" name "\"" { getline; if ($0 == "    version: \"" expected "\"") found=1 }
+      END { exit(found ? 0 : 1) }
+    ' "$repo_root/environments/$environment/requirements.yml" || {
+      printf 'Collection pin mismatch: %s (%s)\n' "$environment" "$name" >&2; exit 1;
+    }
+  done
+done
+builder_image=$(value builder_image)
+[[ -n "$builder_image" ]] || { printf 'builder_image is missing from versions.yml\n' >&2; exit 1; }
+[[ "$builder_image" =~ ^[^[:space:]]+@sha256:[[:xdigit:]]{64}$ ]] || {
+  printf 'builder_image in versions.yml must be a digest-pinned image reference\n' >&2
+  exit 1
+}
+grep -q 'ansible-builder=.*versions.yml' "$repo_root/.github/workflows/build.yml"
+grep -q 'ansible_builder.*versions.yml' "$repo_root/.github/workflows/molecule-reusable.yml"
+grep -q 'builder_image' "$repo_root/scripts/build"
