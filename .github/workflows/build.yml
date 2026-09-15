@@ -47,7 +47,7 @@ jobs:
       - name: Check image artifact integrity
         run: sha256sum image.tar > image.tar.sha256 && sha256sum --check image.tar.sha256
       - name: Export scanned image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: image-${{ matrix.environment }}
           path: |
