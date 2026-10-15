@@ -1,17 +1,14 @@
 # Contributing
 
-Dependency changes are compatibility changes. Update `versions.yml`, run the
-sync script, build all three images, and include upstream compatibility sources
-in the pull request description. Do not replace exact release pins with
-`latest` tags.
-
-Before submitting:
+Dependency changes affect the shared Molecule environment. Update
+`versions.yml`, run `scripts/update-dependencies`, and review all generated
+requirements. Before submitting, run:
 
 ```bash
 make validate
 yamllint .
 ```
 
-Use a real disposable Idarsi role for image validation when changing Molecule,
-collection, or system dependencies. Never add credentials, private registry
-configuration, or host-specific paths to the image.
+When changing Molecule or host dependencies, exercise a disposable role using
+the affected Podman or KVM scenario. Do not add role-specific collections to
+the shared environment; declare them in the role repository.

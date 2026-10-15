@@ -1,29 +1,22 @@
 # Testing
 
-This repository tests the controller images themselves. Role behavior is
-tested by role repositories through the reusable workflow.
+This repository prepares a reusable Rocky Linux 10 host for Molecule tests in
+Idarsi Ansible role repositories. The shared controller venv supports two
+target backends: Podman for fast tests and KVM + Kickstart for full virtual
+machines. Role-specific scenarios and tests remain in each role repository.
 
-| Platform/image | Ansible or application versions | Molecule scenarios | Main coverage |
+| Ansible environment | ansible-core | Python | Typical use |
 | --- | --- | --- | --- |
-| Rocky Linux 9 controller | ansible-core 2.19.12, Python 3.11 | image smoke test | Builder output and Ansible availability |
-| Rocky Linux 9 controller | ansible-core 2.20.8, Python 3.12 | image smoke test | Current release baseline |
-| Rocky Linux 9 controller | ansible-core 2.21.3, Python 3.12 | image smoke test | Forward compatibility |
-| Role-selected target images | Role-defined | role validation, baseline, lifecycle, guardrails | Delegated to each role |
+| `ansible-min` | 2.19.12 | 3.12 | Minimum supported line |
+| `ansible-current` | 2.20.8 | 3.12 | Default development baseline |
+| `ansible-next` | 2.21.3 | 3.12 | Forward compatibility |
 
-## Commands
+Run `./install.sh [podman|kvm|all] [ansible-min|ansible-current|ansible-next]`
+to prepare the host and selected venv. Activate the venv before running the
+role's Molecule scenario. For KVM, the host also needs firmware virtualization
+enabled and access to `/dev/kvm`; a new login is required if the installer adds
+the user to the `libvirt` group.
 
-`make validate` renders all Builder definitions. `make build-current` builds
-and smoke-tests the default image. `make test ROLE_PATH=...` runs the selected
-role's Molecule command through the current controller image.
-
-The central CI matrix runs all three image builds. Role CI should make
-`ansible-min` and `ansible-current` blocking. `ansible-next` may be allowed to
-fail only when the role explicitly documents that temporary policy.
-
-## Gaps
-
-This repository does not claim that every Idarsi role supports every target OS.
-It also does not run a role scenario in this repository because scenarios
-describe role behavior. Each role must maintain validation, baseline,
-idempotence, lifecycle, and destructive guardrail coverage appropriate to its
-public states.
+Before submitting repository changes, run `make validate` and `yamllint .`.
+This repository validates its setup scripts and dependency pins; role behavior
+is verified by each role's own Molecule scenarios.

@@ -1,0 +1,38 @@
+---
+- name: Destroy KVM guests created for Molecule
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    molecule_config: "{{ lookup('file', lookup('env', 'MOLECULE_FILE')) | from_yaml }}"
+    test_environment: "{{ lookup('env', 'IDARSI_TEST_ENVIRONMENT') }}"
+    molecule_ephemeral_directory: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+  tasks:
+    - name: Destroy each VM and its managed disk
+      ansible.builtin.command:
+        argv:
+          - "{{ test_environment }}/scripts/kvm-vm"
+          - destroy
+          - "{{ item.name }}"
+      environment:
+        MOLECULE_EPHEMERAL_DIRECTORY: "{{ molecule_ephemeral_directory }}"
+        KVM_LIBVIRT_URI: "{{ item.libvirt_uri | default(molecule_config.driver.libvirt_uri | default('qemu:///system')) }}"
+      loop: "{{ molecule_config.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: molecule_kvm_destroy
+      failed_when: false
+
+    - name: Remove temporary SSH credentials
+      ansible.builtin.file:
+        path: "{{ molecule_ephemeral_directory }}/{{ item }}"
+        state: absent
+      loop:
+        - kvm_ed25519
+        - kvm_ed25519.pub
+      when: molecule_kvm_destroy.results | selectattr('rc', 'ne', 0) | list | length == 0
+
+    - name: Report VM cleanup errors
+      ansible.builtin.assert:
+        that: molecule_kvm_destroy.results | selectattr('rc', 'ne', 0) | list | length == 0
+        fail_msg: "One or more KVM guests could not be destroyed; inspect the Molecule output."

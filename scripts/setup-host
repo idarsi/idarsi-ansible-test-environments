@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+state_user=${SUDO_USER:-${USER:-$(id -un)}}
+state_user_home=$(getent passwd "$state_user" | cut -d: -f6)
+state_user_home=${state_user_home:-$HOME}
+state_home=${XDG_STATE_HOME:-$state_user_home/.local/state}
+repo_id=$(printf '%s' "$repo_root" | sha256sum | cut -c1-16)
+state_dir="$state_home/idarsi-ansible-test-environments/$repo_id"
+
+usage() {
+  printf 'Usage: %s check|install podman|kvm|all\n' "$0" >&2
+}
+
+[[ $# -eq 2 ]] || { usage; exit 2; }
+action=$1
+profile=$2
+[[ "$action" == check || "$action" == install ]] || { usage; exit 2; }
+case "$profile" in
+  podman) packages=(git python3.12 python3.12-pip openssh-clients tmux podman) ;;
+  kvm) packages=(git python3.12 python3.12-pip openssh-clients tmux qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
+  all) packages=(git python3.12 python3.12-pip openssh-clients tmux podman qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
+  *) usage; exit 2 ;;
+esac
+
+[[ -r /etc/os-release ]] || { printf 'Cannot identify host OS\n' >&2; exit 1; }
+# shellcheck disable=SC1091
+. /etc/os-release
+[[ ${ID:-} == rocky && ${VERSION_ID%%.*} == 10 ]] || {
+  printf 'Host setup currently supports Rocky Linux 10; detected %s %s\n' "${ID:-unknown}" "${VERSION_ID:-unknown}" >&2
+  exit 1
+}
+
+missing=()
+missing_rpm_names=()
+for package in "${packages[@]}"; do
+  case "$package" in
+    python3.12) rpm_name=python3 ;;
+    python3.12-pip) rpm_name=python3-pip ;;
+    libguestfs-tools-c) rpm_name=guestfs-tools ;;
+    *) rpm_name=$package ;;
+  esac
+  if ! rpm -q "$rpm_name" >/dev/null 2>&1; then
+    missing+=("$package")
+    missing_rpm_names+=("$rpm_name")
+  fi
+done
+
+needs_libvirt=false
+if [[ "$profile" == kvm || "$profile" == all ]]; then
+  systemctl is-enabled --quiet libvirtd && systemctl is-active --quiet libvirtd || needs_libvirt=true
+fi
+requesting_user=${SUDO_USER:-${USER:-}}
+needs_libvirt_group=false
+if [[ ( "$profile" == kvm || "$profile" == all ) && -n "$requesting_user" && "$requesting_user" != root ]]; then
+  id -nG "$requesting_user" 2>/dev/null | tr ' ' '\n' | grep -qx libvirt || needs_libvirt_group=true
+fi
+needs_network=false
+needs_kvm_device=false
+if [[ "$profile" == kvm || "$profile" == all ]]; then
+  network_info=$(virsh --connect qemu:///system net-info default 2>/dev/null || true)
+  if [[ -z "$network_info" ]] || ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); active=$2} /^Autostart:/ {gsub(/[[:space:]]/, "", $2); autostart=$2} END {exit(active == "yes" && autostart == "yes" ? 0 : 1)}' <<<"$network_info"; then
+    needs_network=true
+  fi
+  [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || needs_kvm_device=true
+fi
+
+if [[ ${#missing[@]} -eq 0 && $needs_libvirt == false && $needs_libvirt_group == false && $needs_network == false && $needs_kvm_device == false ]]; then
+  printf 'All %s host requirements are ready.\n' "$profile"
+  exit 0
+fi
+if [[ ${#missing[@]} -gt 0 ]]; then
+  printf 'Missing packages: %s\n' "${missing[*]}"
+fi
+if [[ $needs_libvirt == true ]]; then
+  printf 'libvirtd is not both enabled and active.\n' >&2
+fi
+if [[ $needs_libvirt_group == true ]]; then
+  printf 'User %s is not a member of the libvirt group.\n' "$requesting_user" >&2
+fi
+if [[ $needs_network == true ]]; then
+  printf 'libvirt default network is not both active and set to autostart.\n' >&2
+fi
+if [[ $needs_kvm_device == true ]]; then
+  printf 'The current user cannot access /dev/kvm, or hardware virtualization is unavailable.\n' >&2
+fi
+[[ "$action" == install ]] || exit 1
+
+if [[ ${#missing[@]} -gt 0 ]]; then
+  if [[ $EUID -eq 0 ]]; then
+    dnf install -y "${missing[@]}"
+  else
+    command -v sudo >/dev/null || { printf 'sudo is required to install host packages\n' >&2; exit 1; }
+    sudo dnf install -y "${missing[@]}"
+  fi
+  mkdir -p "$state_dir"
+  for package in "${missing_rpm_names[@]}"; do
+    if ! grep -Fxq "$package" "$state_dir/installed-packages" 2>/dev/null; then
+      printf '%s\n' "$package" >>"$state_dir/installed-packages"
+    fi
+  done
+fi
+
+if [[ "$profile" == kvm || "$profile" == all ]]; then
+  if [[ $needs_libvirt_group == true ]]; then
+    if [[ $EUID -eq 0 ]]; then
+      usermod -aG libvirt "$requesting_user"
+    else
+      sudo usermod -aG libvirt "$requesting_user"
+    fi
+    mkdir -p "$state_dir"
+    printf '%s\n' "$requesting_user" >"$state_dir/libvirt-group-user"
+  fi
+  if [[ $EUID -eq 0 ]]; then
+    systemctl enable --now libvirtd
+  else
+    sudo systemctl enable --now libvirtd
+  fi
+  if [[ $EUID -eq 0 ]]; then
+    virsh_admin=(virsh --connect qemu:///system)
+  else
+    virsh_admin=(sudo virsh --connect qemu:///system)
+  fi
+  if ! "${virsh_admin[@]}" net-info default >/dev/null 2>&1; then
+    default_network=/usr/share/libvirt/networks/default.xml
+    if [[ -r "$default_network" ]]; then
+      "${virsh_admin[@]}" net-define "$default_network"
+    else
+      printf 'No libvirt default network definition found at %s\n' "$default_network" >&2
+      exit 1
+    fi
+  fi
+  network_info=$("${virsh_admin[@]}" net-info default)
+  if ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); found=($2 == "yes")} END {exit(found ? 0 : 1)}' <<<"$network_info"; then
+    "${virsh_admin[@]}" net-start default
+  fi
+  "${virsh_admin[@]}" net-autostart default >/dev/null
+  if [[ $needs_kvm_device == true ]]; then
+    printf 'KVM packages are installed, but this session still cannot use /dev/kvm. Check firmware virtualization and device permissions.\n' >&2
+  else
+    printf 'KVM packages and default libvirt network are ready.\n'
+  fi
+  if [[ $needs_libvirt_group == true ]]; then
+    printf 'Added %s to the libvirt group; log out and back in before using KVM.\n' "$requesting_user"
+  fi
+fi

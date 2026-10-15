@@ -1,0 +1,15 @@
+---
+- name: Verify the Podman smoke-test target
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Inspect the smoke-test marker
+      ansible.builtin.stat:
+        path: /var/tmp/idarsi-molecule-smoke
+      register: smoke_marker
+
+    - name: Check Molecule created and configured the target
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == "Rocky"
+          - smoke_marker.stat.exists

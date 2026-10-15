@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+usage() {
+  printf 'Usage: %s <ansible-min|ansible-current|ansible-next>\n' "$0" >&2
+}
+environment=${1:-}
+[[ -d "$repo_root/environments/$environment" ]] || { usage; exit 2; }
+
+python_version=$(awk -v key="${environment#ansible-}:" '
+  /^python:/ { in_python = 1; next }
+  /^[^[:space:]#]/ { in_python = 0 }
+  in_python && $1 == key { gsub(/"/, "", $2); print $2; exit }
+' "$repo_root/versions.yml")
+[[ -n "$python_version" ]] || { printf 'Python pin not found for %s\n' "$environment" >&2; exit 1; }
+python_bin="python${python_version}"
+command -v "$python_bin" >/dev/null || {
+  printf '%s is required. Install it with: scripts/setup-host install all\n' "$python_bin" >&2
+  exit 1
+}
+
+venv="$repo_root/.venv/$environment"
+"$python_bin" -m venv --clear "$venv"
+"$venv/bin/python" -m pip install --disable-pip-version-check -r "$repo_root/environments/$environment/requirements.txt"
+"$venv/bin/ansible-galaxy" collection install \
+  --collections-path "$venv/collections" \
+  -r "$repo_root/environments/$environment/requirements.yml"
+
+# Expose shared lifecycle files and pinned collections to role repositories.
+cat >>"$venv/bin/activate" <<ACTIVATE_HOOK
+
+# Idarsi Ansible test environment integration.
+export IDARSI_TEST_ENVIRONMENT=$(printf '%q' "$repo_root")
+_idarsi_collections_path=$(printf '%q' "$venv/collections")
+case ":\${ANSIBLE_COLLECTIONS_PATH:-}:" in
+  *":\$_idarsi_collections_path:"*) ;;
+  *) export ANSIBLE_COLLECTIONS_PATH="\$_idarsi_collections_path\${ANSIBLE_COLLECTIONS_PATH:+:\$ANSIBLE_COLLECTIONS_PATH}" ;;
+esac
+unset _idarsi_collections_path
+ACTIVATE_HOOK
+printf 'Created %s\nActivate with: source %s/bin/activate\n' "$venv" "$venv"

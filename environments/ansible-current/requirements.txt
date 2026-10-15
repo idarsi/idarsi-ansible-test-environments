@@ -1,6 +1,4 @@
+ansible-core==2.20.8
 ansible-runner==2.4.3
 molecule==26.8.0
 molecule-plugins[podman]==26.7.15
-setuptools==84.0.0
-jaraco.context==6.1.0
-wheel==0.46.2

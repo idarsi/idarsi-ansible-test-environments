@@ -1,53 +1,47 @@
-# Role Integration
+# Role integration
 
-Each role keeps its own `molecule/` scenarios. A typical caller workflow is:
+Each Idarsi role keeps its Molecule scenarios and test cases in its own
+repository. The shared test-environment repository supplies the activated
+Ansible venv and common backend lifecycle tools.
 
-```yaml
-name: Molecule
-on:
-  pull_request:
-  push:
-    branches: [main]
-jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        environment: [ansible-min, ansible-current, ansible-next]
-      uses: idarsi/idarsi-ansible-test-environments/.github/workflows/molecule-reusable.yml@<reviewed-release-tag-or-commit-sha>
-    with:
-      environment: ${{ matrix.environment }}
-      test_environment_ref: v1
-      role_repository: ${{ github.repository }}
-      role_ref: ${{ github.sha }}
-      molecule_args: test
+## Run a role scenario
+
+Activate the desired venv in the shell, then run Molecule from the role repo:
+
+```bash
+source /path/to/idarsi-ansible-test-environments/.venv/ansible-current/bin/activate
+cd /path/to/ansible-role
+molecule test
 ```
 
-The workflow builds the selected shared image in the runner, checks out the
-role, and invokes its existing Molecule scenario. For reproducible CI, replace
-the placeholder with a reviewed release tag or commit SHA. Do not use an
-unreviewed moving branch reference.
+The role's default Molecule scenario should target Podman for quick tests.
+Define a separate KVM scenario for full Rocky/RHEL VM testing, and run it with
+`molecule test -s kvm`. The KVM scenario can reference shared lifecycle
+playbooks through the `IDARSI_TEST_ENVIRONMENT` variable set during venv
+activation:
 
-Role-specific target matrices remain in the role workflow. For example, a
-role supporting Rocky 9 and 10 can add `target_image` to its matrix and pass it
-as an environment variable consumed by that role's `molecule.yml`; the shared
-controller image does not decide this.
+```yaml
+ansible:
+  playbooks:
+    create: "${IDARSI_TEST_ENVIRONMENT}/molecule/kvm/create.yml"
+    destroy: "${IDARSI_TEST_ENVIRONMENT}/molecule/kvm/destroy.yml"
+```
 
-Additional collections belong in a scenario's `requirements.yml`, for example:
+See [Podman Molecule guidance](podman-molecule.md) and
+[KVM + Kickstart guidance](kvm-molecule.md) for platform-specific details.
+
+## Collections
+
+The shared venv installs `ansible.posix` and `containers.podman`. Roles should
+use `ansible.builtin.*` modules where possible. Declare any additional
+collections the role needs in its own Galaxy requirements file and install
+them in that role's Molecule dependency phase. For example:
 
 ```yaml
 ---
 collections:
-  - name: "community.postgresql"
-    version: "3.0.0"
+  - name: community.postgresql
+    version: 3.0.0
 ```
 
-Do not add service-specific dependencies to the common image solely to make one
-role convenient.
-
-The central build workflow runs for `vX.Y.Z` tags, and only publishes when the
-semantic tag is protected (`github.ref_protected == true`). Repository tag
-protection must be enabled by maintainers; this document does not imply that
-repository settings are configured. Image version tags are derived from the
-Ansible versions in `versions.yml`, not from the release tag. Consumers should
-pin a published image digest for release-critical use.
+The example is role-specific and is not installed in the shared venv.

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -u
+
+uri=${KVM_LIBVIRT_URI:-qemu:///system}
+before=${IDARSI_KVM_PREEXISTING_DOMAINS:-}
+timeout_seconds=${IDARSI_KVM_CONSOLE_WAIT_SECONDS:-180}
+deadline=$((SECONDS + timeout_seconds))
+log_root=${KVM_LOG_DIR:-${TMPDIR:-/tmp}/idarsi-ansible-test-environments/kvm-logs}
+
+umask 077
+mkdir -p "$log_root"
+chmod 700 "$log_root"
+find "$log_root" -maxdepth 1 -type f -name 'molecule-*.console.log' -mtime +7 -delete
+
+printf 'Waiting up to %s seconds for a new Molecule KVM guest...\n' "$timeout_seconds"
+while (( SECONDS < deadline )); do
+  while IFS= read -r domain; do
+    [[ "$domain" =~ ^molecule-rocky10-[a-f0-9]{8}$ ]] || continue
+    case "|$before|" in *"|$domain|"*) continue ;; esac
+    state=$(virsh --connect "$uri" domstate "$domain" 2>/dev/null || true)
+    [[ "$state" == running ]] || continue
+    if [[ -z ${TMUX_PANE:-} ]]; then
+      printf 'This console helper must run inside its tmux pane.\n' >&2
+      exit 1
+    fi
+    console_log="$log_root/${domain}.console.log"
+    : >"$console_log"
+    chmod 600 "$console_log"
+    printf 'Opening %s directly in this tmux pane. Detach from virsh console with Ctrl+].\n' "$domain"
+    printf 'Serial console log: %s\n' "$console_log"
+    printf -v log_command 'cat >> %q' "$console_log"
+    tmux pipe-pane -t "$TMUX_PANE" "$log_command"
+    printf -v console_command '%q ' virsh --connect "$uri" console "$domain"
+    tmux respawn-pane -k -t "$TMUX_PANE" "$console_command"
+    exit 0
+  done < <(virsh --connect "$uri" list --all --name 2>/dev/null)
+  sleep 2
+done
+
+printf 'No new running molecule-rocky10 guest appeared. Check the Molecule pane for the failure.\n'

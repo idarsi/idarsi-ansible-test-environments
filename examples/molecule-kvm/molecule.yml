@@ -1,0 +1,26 @@
+---
+scenario:
+  name: kvm
+
+driver:
+  name: default
+  options:
+    managed: true
+
+ansible:
+  playbooks:
+    create: "${IDARSI_TEST_ENVIRONMENT}/molecule/kvm/create.yml"
+    destroy: "${IDARSI_TEST_ENVIRONMENT}/molecule/kvm/destroy.yml"
+
+platforms:
+  - name: rocky10
+    install_source: /var/lib/libvirt/boot/Rocky-10-x86_64-dvd.iso
+    kickstart: rocky9-10.ks.tmpl
+    memory_mb: 4096
+    vcpus: 2
+    disk_size_gb: 30
+    install_timeout: 3600
+    ssh_user: molecule
+
+provisioner:
+  name: ansible
