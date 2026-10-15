@@ -1,4 +1,4 @@
 ansible-core==2.21.3
 ansible-runner==2.4.3
-molecule==26.8.0
+molecule==26.10.0
 molecule-plugins[podman]==26.7.15
