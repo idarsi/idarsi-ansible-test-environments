@@ -1,0 +1,84 @@
+---
+- name: Create KVM guests for Molecule
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    molecule_config: "{{ lookup('file', lookup('env', 'MOLECULE_FILE')) | from_yaml }}"
+    test_environment: "{{ lookup('env', 'IDARSI_TEST_ENVIRONMENT') }}"
+    molecule_ephemeral_directory: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    molecule_scenario_directory: "{{ lookup('env', 'MOLECULE_SCENARIO_DIRECTORY') }}"
+  tasks:
+    - name: Require at least one VM platform
+      ansible.builtin.assert:
+        that:
+          - molecule_config.platforms | length > 0
+          - test_environment | length > 0
+
+    - name: Require an installation source for each VM
+      ansible.builtin.assert:
+        that:
+          - item.install_source | default('') | string | length > 0
+        fail_msg: >-
+          Platform {{ item.name }} has no install_source. Set it to an installer
+          ISO or install tree; the kvm-smoke scenario reads it from
+          IDARSI_TEST_KVM_INSTALL_SOURCE.
+      loop: "{{ molecule_config.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Provision all configured guests
+      block:
+        - name: Create VM and wait for SSH
+          ansible.builtin.command:
+            argv:
+              - "{{ test_environment }}/scripts/kvm-vm"
+              - create
+              - "{{ item.name }}"
+              - "{{ item.install_source }}"
+              - "{{ molecule_scenario_directory }}/{{ item.kickstart }}"
+          environment:
+            MOLECULE_EPHEMERAL_DIRECTORY: "{{ molecule_ephemeral_directory }}"
+            MOLECULE_SCENARIO_DIRECTORY: "{{ molecule_scenario_directory }}"
+            KVM_LIBVIRT_URI: "{{ item.libvirt_uri | default(molecule_config.driver.libvirt_uri | default('qemu:///system')) }}"
+            KVM_NETWORK: "{{ item.network | default('default') }}"
+            KVM_SSH_USER: "{{ item.ssh_user | default('molecule') }}"
+            KVM_MEMORY_MB: "{{ item.memory_mb | default(4096) }}"
+            KVM_VCPUS: "{{ item.vcpus | default(2) }}"
+            KVM_DISK_SIZE_GB: "{{ item.disk_size_gb | default(30) }}"
+            KVM_INSTALL_TIMEOUT: "{{ item.install_timeout | default(3600) }}"
+          loop: "{{ molecule_config.platforms }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: molecule_kvm_create
+
+        - name: Collect instance connection details
+          ansible.builtin.set_fact:
+            molecule_instance_config: "{{ molecule_kvm_create.results | map(attribute='stdout') | map('from_json') | list }}"
+
+        - name: Write Molecule instance configuration
+          ansible.builtin.copy:
+            content: |
+              # Molecule managed
+              ---
+              {{ molecule_instance_config | to_nice_yaml(indent=2) }}
+            dest: "{{ lookup('env', 'MOLECULE_INSTANCE_CONFIG') }}"
+            mode: "0600"
+      rescue:
+        - name: Remove any guests created before the failure
+          ansible.builtin.command:
+            argv:
+              - "{{ test_environment }}/scripts/kvm-vm"
+              - destroy
+              - "{{ item.name }}"
+          environment:
+            MOLECULE_EPHEMERAL_DIRECTORY: "{{ molecule_ephemeral_directory }}"
+            KVM_LIBVIRT_URI: "{{ item.libvirt_uri | default(molecule_config.driver.libvirt_uri | default('qemu:///system')) }}"
+          loop: "{{ molecule_config.platforms }}"
+          loop_control:
+            label: "{{ item.name }}"
+          failed_when: false
+
+        - name: Fail the create action after cleanup
+          ansible.builtin.fail:
+            msg: "KVM guest creation failed; any guests created in this run were removed."

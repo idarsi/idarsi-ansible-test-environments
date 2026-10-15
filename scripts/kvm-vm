@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: %s create <molecule-instance> <install-source> <kickstart-template>\n       %s destroy <molecule-instance>\n' "$0" "$0" >&2
+}
+
+[[ $# -ge 2 ]] || { usage; exit 2; }
+action=$1
+instance=$2
+shift 2
+[[ "$instance" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$ ]] || {
+  printf 'Invalid Molecule instance name: %s\n' "$instance" >&2
+  exit 2
+}
+[[ -n ${MOLECULE_EPHEMERAL_DIRECTORY:-} && -d $MOLECULE_EPHEMERAL_DIRECTORY ]] || {
+  printf 'MOLECULE_EPHEMERAL_DIRECTORY must point to the active Molecule scenario directory\n' >&2
+  exit 2
+}
+
+uri=${KVM_LIBVIRT_URI:-qemu:///system}
+network=${KVM_NETWORK:-default}
+ssh_user=${KVM_SSH_USER:-molecule}
+key_file="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"
+hash=$(printf '%s' "$MOLECULE_EPHEMERAL_DIRECTORY" | sha256sum | cut -c1-8)
+domain="molecule-${instance}-${hash}"
+domain=${domain:0:63}
+virsh_cmd=(virsh --connect "$uri")
+
+case "$action" in
+  destroy)
+    [[ $# -eq 0 ]] || { usage; exit 2; }
+    if "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1; then
+      "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
+      "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage
+    fi
+    printf 'Destroyed %s (%s) if it existed.\n' "$instance" "$domain"
+    ;;
+  create)
+    [[ $# -eq 2 ]] || { usage; exit 2; }
+    install_source=$1
+    kickstart_template=$2
+    [[ -n "$install_source" ]] || {
+      printf 'Install source is empty. Set install_source in molecule.yml; kvm-smoke uses IDARSI_TEST_KVM_INSTALL_SOURCE.\n' >&2
+      exit 2
+    }
+    memory=${KVM_MEMORY_MB:-4096}
+    vcpus=${KVM_VCPUS:-2}
+    disk_size=${KVM_DISK_SIZE_GB:-30}
+    timeout_seconds=${KVM_INSTALL_TIMEOUT:-3600}
+    [[ "$memory" =~ ^[0-9]+$ && $memory -ge 1024 ]] || { printf 'KVM_MEMORY_MB must be an integer of at least 1024\n' >&2; exit 2; }
+    [[ "$vcpus" =~ ^[0-9]+$ && $vcpus -ge 1 ]] || { printf 'KVM_VCPUS must be a positive integer\n' >&2; exit 2; }
+    [[ "$disk_size" =~ ^[0-9]+$ && $disk_size -ge 10 ]] || { printf 'KVM_DISK_SIZE_GB must be an integer of at least 10\n' >&2; exit 2; }
+    [[ "$timeout_seconds" =~ ^[0-9]+$ && $timeout_seconds -ge 60 ]] || { printf 'KVM_INSTALL_TIMEOUT must be at least 60 seconds\n' >&2; exit 2; }
+    [[ "$ssh_user" =~ ^[a-z_][a-z0-9_-]{0,30}$ ]] || { printf 'KVM_SSH_USER is not a valid Linux username\n' >&2; exit 2; }
+    command -v virt-install >/dev/null || { printf 'virt-install is required; run make setup-host PROFILE=kvm\n' >&2; exit 1; }
+    command -v ssh-keygen >/dev/null || { printf 'ssh-keygen is required; run make setup-host PROFILE=kvm\n' >&2; exit 1; }
+    command -v timeout >/dev/null || { printf 'timeout is required\n' >&2; exit 1; }
+    if [[ "$install_source" != http://* && "$install_source" != https://* ]]; then
+      if [[ "$install_source" != /* ]]; then
+        install_source="${MOLECULE_SCENARIO_DIRECTORY:-$PWD}/$install_source"
+      fi
+      [[ -r "$install_source" ]] || { printf 'Install ISO or source path not found: %s\n' "$install_source" >&2; exit 1; }
+      install_source=$(realpath "$install_source")
+    fi
+    if [[ "$kickstart_template" != /* ]]; then
+      base_dir=${MOLECULE_SCENARIO_DIRECTORY:-$PWD}
+      kickstart_template=$(realpath "$base_dir/$kickstart_template")
+    else
+      kickstart_template=$(realpath "$kickstart_template")
+    fi
+    [[ -r "$kickstart_template" ]] || { printf 'Kickstart template not found: %s\n' "$kickstart_template" >&2; exit 1; }
+    "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1 && {
+      printf 'VM %s already exists. Run molecule destroy before creating it again.\n' "$domain" >&2
+      exit 1
+    }
+    "${virsh_cmd[@]}" net-info "$network" >/dev/null 2>&1 || {
+      printf 'libvirt network %s is unavailable at %s\n' "$network" "$uri" >&2
+      exit 1
+    }
+    network_state=$("${virsh_cmd[@]}" net-info "$network" | awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); print $2}')
+    if [[ "$network_state" != yes ]]; then
+      "${virsh_cmd[@]}" net-start "$network"
+    fi
+    if [[ ! -s "$key_file" ]]; then
+      ssh-keygen -q -t ed25519 -N '' -C "molecule-$instance" -f "$key_file"
+    fi
+    chmod 600 "$key_file"
+    public_key=$(<"$key_file.pub")
+    rendered_kickstart="$MOLECULE_EPHEMERAL_DIRECTORY/${domain}.ks.cfg"
+    python3 - "$kickstart_template" "$rendered_kickstart" "$ssh_user" "$public_key" <<'PY'
+from pathlib import Path
+import sys
+
+source, target, user, public_key = sys.argv[1:]
+template = Path(source).read_text()
+rendered = template.replace("@@SSH_USER@@", user).replace("@@SSH_PUBLIC_KEY@@", public_key)
+if "@@SSH_" in rendered:
+    raise SystemExit("Kickstart template contains an unrecognized SSH placeholder")
+Path(target).write_text(rendered)
+Path(target).chmod(0o600)
+PY
+    log_root=${KVM_LOG_DIR:-${TMPDIR:-/tmp}/idarsi-ansible-test-environments/kvm-logs}
+    mkdir -p "$log_root"
+    find "$log_root" -maxdepth 1 -type f -name 'molecule-*.virt-install.log' -mtime +7 -delete
+    install_log="$log_root/${domain}.virt-install.log"
+    deadline=$((SECONDS + timeout_seconds))
+    virt_install_wait_minutes=$(((timeout_seconds + 59) / 60))
+    if ! virt-install --connect "$uri" \
+      --name "$domain" \
+      --memory "$memory" \
+      --vcpus "$vcpus" \
+      --disk "size=${disk_size},format=qcow2,bus=virtio" \
+      --network "network=${network},model=virtio" \
+      --location "$install_source" \
+      --initrd-inject "$rendered_kickstart" \
+      --extra-args "inst.ks=file:/$(basename "$rendered_kickstart") console=ttyS0,115200n8" \
+      --os-variant generic \
+      --graphics none \
+      --noautoconsole \
+      --wait "$virt_install_wait_minutes" >"$install_log" 2>&1; then
+      printf 'virt-install failed. Install log: %s\n' "$install_log" >&2
+      cat "$install_log" >&2
+      "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
+      "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage >/dev/null 2>&1 || true
+      exit 1
+    fi
+
+    address=''
+    while (( SECONDS < deadline )); do
+      if "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1; then
+        guest_state=$("${virsh_cmd[@]}" domstate "$domain" 2>/dev/null || true)
+        if [[ "$guest_state" != running ]]; then
+          printf 'VM %s stopped before SSH became ready (state: %s). Install log: %s\n' \
+            "$domain" "${guest_state:-unknown}" "$install_log" >&2
+          exit 1
+        fi
+        address=$("${virsh_cmd[@]}" domifaddr "$domain" --source lease --full 2>/dev/null | awk '$3 == "ipv4" {sub(/\/.*/, "", $4); print $4; exit}') || address=''
+        if [[ -n "$address" ]] && ssh -F /dev/null -i "$key_file" \
+          -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null "$ssh_user@$address" true >/dev/null 2>&1; then
+          break
+        fi
+      fi
+      sleep 5
+    done
+    if [[ -z "$address" ]] || ! ssh -F /dev/null -i "$key_file" \
+      -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null "$ssh_user@$address" true >/dev/null 2>&1; then
+      printf 'VM %s did not become SSH-ready within %s seconds. Install log: %s\n' "$domain" "$timeout_seconds" "$install_log" >&2
+      cat "$install_log" >&2
+      "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
+      "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage >/dev/null 2>&1 || true
+      exit 1
+    fi
+    KVM_INSTANCE="$instance" KVM_ADDRESS="$address" KVM_USER="$ssh_user" KVM_KEY_FILE="$key_file" python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "instance": os.environ["KVM_INSTANCE"],
+    "address": os.environ["KVM_ADDRESS"],
+    "user": os.environ["KVM_USER"],
+    "port": "22",
+    "identity_file": os.environ["KVM_KEY_FILE"],
+}))
+PY
+    ;;
+  *) usage; exit 2 ;;
+esac

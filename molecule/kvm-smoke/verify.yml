@@ -1,0 +1,21 @@
+---
+- name: Verify the KVM smoke-test target
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Read SELinux mode
+      ansible.builtin.command: getenforce
+      changed_when: false
+      register: selinux_mode
+
+    - name: Inspect the smoke-test marker
+      ansible.builtin.stat:
+        path: /var/tmp/idarsi-molecule-smoke
+      register: smoke_marker
+
+    - name: Check the VM and its security baseline
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == "Rocky"
+          - smoke_marker.stat.exists
+          - selinux_mode.stdout == "Enforcing"

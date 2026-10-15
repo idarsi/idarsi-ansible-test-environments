@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+usage() {
+  printf 'Usage: %s <ansible-min|ansible-current|ansible-next> <Rocky-10.iso>\n' "$0" >&2
+}
+
+[[ $# -eq 2 ]] || { usage; exit 2; }
+environment=$1
+iso=$(realpath "$2")
+[[ "$environment" =~ ^ansible-(min|current|next)$ ]] || { usage; exit 2; }
+[[ -r "$iso" && -f "$iso" ]] || { printf 'Readable ISO file required: %s\n' "$iso" >&2; exit 1; }
+
+venv="$repo_root/.venv/$environment"
+molecule="$venv/bin/molecule"
+[[ -x "$molecule" ]] || {
+  printf 'Molecule environment not found: %s\nRun install.sh kvm %s first.\n' "$venv" "$environment" >&2
+  exit 1
+}
+command -v tmux >/dev/null || { printf 'tmux is missing; run ./install.sh kvm %s\n' "$environment" >&2; exit 1; }
+command -v virsh >/dev/null || { printf 'virsh is missing; run ./install.sh kvm %s\n' "$environment" >&2; exit 1; }
+"$repo_root/scripts/setup-host" check kvm
+
+before_domains=$(virsh --connect qemu:///system list --all --name | sed '/^$/d' | paste -sd '|')
+session="idarsi-kvm-smoke-$(date +%Y%m%d%H%M%S)-$$"
+log_root=${TMPDIR:-/tmp}/idarsi-ansible-test-environments/molecule-logs
+umask 077
+mkdir -p "$log_root"
+chmod 700 "$log_root"
+find "$log_root" -maxdepth 1 -type f -name 'kvm-smoke-*.log' -mtime +7 -delete
+molecule_log="$log_root/kvm-smoke-$(date +%Y%m%d%H%M%S)-$$.log"
+: >"$molecule_log"
+chmod 600 "$molecule_log"
+quote() { printf '%q' "$1"; }
+
+tmux new-session -d -s "$session" -c "$repo_root"
+tmux split-window -v -t "$session" -c "$repo_root"
+tmux select-layout -t "$session" even-vertical
+tmux set-window-option -t "$session" remain-on-exit on
+
+molecule_command="export PATH=$(quote "$venv/bin"):\$PATH; export IDARSI_TEST_ENVIRONMENT=$(quote "$repo_root"); export IDARSI_TEST_KVM_INSTALL_SOURCE=$(quote "$iso"); export ANSIBLE_COLLECTIONS_PATH=$(quote "$venv/collections"):\${ANSIBLE_COLLECTIONS_PATH:-\$HOME/.ansible/collections:/usr/share/ansible/collections}; export ANSIBLE_VERBOSITY=3 ANSIBLE_NOCOLOR=1 NO_COLOR=1; set -o pipefail; $(quote "$molecule") --debug test -s kvm-smoke 2>&1 | tee $(quote "$molecule_log"); molecule_status=\${PIPESTATUS[0]}; printf '\\nMolecule exit status: %s\\nLog file: %s\\n' \"\$molecule_status\" $(quote "$molecule_log"); exit \"\$molecule_status\""
+console_command="export IDARSI_KVM_PREEXISTING_DOMAINS=$(quote "$before_domains"); $(quote "$repo_root/scripts/kvm-console-wait")"
+
+tmux send-keys -t "$session:0.0" "$molecule_command" C-m
+tmux send-keys -t "$session:0.1" "$console_command" C-m
+printf 'Molecule and guest serial console are running in tmux session %s.\n' "$session"
+printf 'Molecule log: %s\n' "$molecule_log"
+printf 'Console detach key: Ctrl+] (tmux detach: Ctrl+b, then d).\n'
+printf 'Close the tmux session: Ctrl+b, then type :kill-session and press Enter.\n'
+exec tmux attach-session -t "$session"

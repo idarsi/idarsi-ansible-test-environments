@@ -1,0 +1,10 @@
+---
+- name: Exercise Ansible against the Podman target
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Create a smoke-test marker
+      ansible.builtin.copy:
+        content: "Molecule Podman target is ready.\n"
+        dest: /var/tmp/idarsi-molecule-smoke
+        mode: "0644"

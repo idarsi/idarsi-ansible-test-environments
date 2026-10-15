@@ -1,55 +1,39 @@
 SHELL := /usr/bin/env bash
 
 ENVIRONMENT ?= ansible-current
-IMAGE ?= localhost/idarsi/ansible-test:$(ENVIRONMENT)
-ROLE_PATH ?=
-MOLECULE_ARGS ?= test
-export MOLECULE_ARGS
+PROFILE ?= all
 
-.PHONY: help build build-min build-current build-next validate check-dependencies check-scripts test test-min test-current test-next update-dependencies
+.PHONY: help install uninstall setup-host setup-venv check-scripts check-dependencies validate update-dependencies
 
 help:
 	@printf '%s\n' \
-		'make build ENVIRONMENT=ansible-current' \
-		'make test ROLE_PATH=/path/to/role ENVIRONMENT=ansible-current' \
-		'make validate' \
-		'make update-dependencies'
+		'make install [PROFILE=all|podman|kvm] [ENVIRONMENT=ansible-current]' \
+		'make setup-host PROFILE=podman|kvm|all' \
+		'make setup-venv ENVIRONMENT=ansible-current' \
+		'make uninstall' \
+		'make check-scripts' \
+		'make check-dependencies' \
+		'make validate'
 
-build:
-	IMAGE=$(IMAGE) scripts/build $(ENVIRONMENT)
+install:
+	./install.sh $(PROFILE) $(ENVIRONMENT)
 
-build-min:
-	ENVIRONMENT=ansible-min IMAGE=$(IMAGE) scripts/build ansible-min
+uninstall:
+	./uninstall.sh
 
-build-current:
-	ENVIRONMENT=ansible-current IMAGE=$(IMAGE) scripts/build ansible-current
+setup-host:
+	scripts/setup-host install $(PROFILE)
 
-build-next:
-	ENVIRONMENT=ansible-next IMAGE=$(IMAGE) scripts/build ansible-next
-
-validate:
-	@scripts/test-scripts
-	@for environment in ansible-min ansible-current ansible-next; do \
-		scripts/build --validate-only $$environment; \
-	done
-
-check-dependencies:
-	scripts/check-dependencies
+setup-venv:
+	scripts/setup-venv $(ENVIRONMENT)
 
 check-scripts:
 	scripts/test-scripts
 
-test:
-	IMAGE=$(IMAGE) scripts/test $(ENVIRONMENT) $(ROLE_PATH)
+check-dependencies:
+	scripts/check-dependencies
 
-test-min:
-	ENVIRONMENT=ansible-min make test
-
-test-current:
-	ENVIRONMENT=ansible-current make test
-
-test-next:
-	ENVIRONMENT=ansible-next make test
+validate: check-scripts check-dependencies
 
 update-dependencies:
 	scripts/update-dependencies

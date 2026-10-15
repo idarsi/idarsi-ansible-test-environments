@@ -1,0 +1,8 @@
+---
+- name: Prepare the Podman smoke-test target
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install Python for Ansible modules
+      ansible.builtin.raw: dnf install -y python3
+      changed_when: false

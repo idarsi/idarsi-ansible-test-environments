@@ -1,0 +1,10 @@
+---
+- name: Exercise Ansible against the KVM target
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Create a smoke-test marker
+      ansible.builtin.copy:
+        content: "Molecule KVM target is ready.\n"
+        dest: /var/tmp/idarsi-molecule-smoke
+        mode: "0644"

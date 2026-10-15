@@ -1,111 +1,76 @@
 # Idarsi Ansible Test Environments
 
-> **Maturity State: Beta**<br>
-> **RC Readiness: 84%**
+This repository prepares a Rocky Linux 10 host for running Molecule tests in
+Idarsi Ansible role repositories. Molecule scenarios stay in each role and
+choose one of two target backends:
 
-This repository provides reproducible Ansible Execution Environments for the
-Idarsi `ansible-iac-role-*` repositories. It centralizes controller-side
-tooling while leaving each role's Molecule scenarios in that role repository.
+- **Podman** for fast container-based tests.
+- **KVM + Kickstart** for full virtual machines, including SELinux and firewall
+  behavior.
 
-> **Pin the test environment, not the user's environment.**
+The same host setup and pinned Ansible environments can be reused across role
+repositories. This repository does not contain role tests or an alternate
+containerized Ansible controller.
 
-The versions in this repository are test fixtures. A role's documented support
-range is a separate compatibility contract and must not be replaced by these
-exact pins.
+## Install
 
-## Environments
-
-| Environment | Ansible Core | Python | Policy |
-| --- | --- | --- | --- |
-| `ansible-min` | 2.19.12 | 3.11 | Oldest Idarsi-supported line; blocking |
-| `ansible-current` | 2.20.8 | 3.12 | Default development and release baseline; blocking |
-| `ansible-next` | 2.21.3 | 3.12 | Forward compatibility signal; optionally non-blocking in role CI |
-
-The initial matrix follows the upstream Ansible control-node support table.
-See `versions.yml` for the single version source of truth and `docs/architecture.md`
-for the rationale. Revalidate the matrix when an Ansible line changes lifecycle.
-
-## Quick Start
-
-Host prerequisites are Git, Podman, and basic POSIX shell tooling. The build
-wrapper automatically runs the pinned Ansible Builder in a temporary Python
-container when it is not installed on the host. Docker may
-be used by setting `CONTAINER_ENGINE=docker` for image builds, but Molecule
-scenarios use the Podman API and are supported primarily with Podman.
+Clone this repository on Rocky Linux 10 and run the installer as your regular
+user. It uses `sudo` when host packages need installing. By default, it
+prepares both backends and installs the `ansible-current` venv:
 
 ```bash
-make build-current
-podman system service --time=0 "$XDG_RUNTIME_DIR/podman/podman.sock"
-make test ROLE_PATH=/path/to/ansible-iac-role-postgresql
+./install.sh
+source .venv/ansible-current/bin/activate
+git clone https://github.com/idarsi/ansible-iac-role-postgresql.git
+cd ansible-iac-role-postgresql
+molecule test
 ```
 
-Build another line with `make build-min` or `make build-next`. Use a specific
-scenario or Molecule arguments with `MOLECULE_ARGS`, for example:
+Install only one backend or choose a different Ansible line with:
 
 ```bash
-make test ROLE_PATH=/path/to/role ENVIRONMENT=ansible-min \
-  MOLECULE_ARGS='test -s validation'
+./install.sh podman ansible-min
+./install.sh kvm ansible-next
 ```
 
-`make validate` renders every Builder definition without building an image.
-The `scripts/test` wrapper mounts the role read-only and the host Podman
-socket; it does not require a project-local Python installation. If
-`MOLECULE_ARGS` is unset, the wrapper runs `test`; an explicitly empty value is
-rejected. Arguments are parsed without shell evaluation, and shell
-metacharacters or malformed quoting are rejected.
+The available Ansible Core versions are pinned in [versions.yml](versions.yml):
+`ansible-min` (2.19.12), `ansible-current` (2.20.8), and `ansible-next`
+(2.21.3). Each has a separate `.venv/` directory. Activate the chosen venv
+before running Molecule; activation exports the shared tooling path and
+collection path to the role's scenario.
 
-## Role Integration
+Role repositories must define their Molecule scenarios to use the desired
+backend. See [role integration](docs/role-integration.md), the
+[Podman guidance](docs/podman-molecule.md), and the
+[KVM + Kickstart guide](docs/kvm-molecule.md).
 
-Keep `molecule/` and all role-specific scenarios in the role repository. The
-shared image supplies Ansible, Runner, Molecule, Podman support, and only the
-small common collection set. A scenario can add its own `molecule/<scenario>/requirements.yml`
-or install additional collections during its dependency phase.
+This repository also has standalone smoke scenarios: run
+`molecule test -s podman-smoke` for Podman, or
+set `IDARSI_TEST_KVM_INSTALL_SOURCE` to a local Rocky ISO and run
+`molecule test -s kvm-smoke` for KVM. The KVM run installs a disposable VM and
+can take several minutes.
 
-For local testing, use the wrapper above. For GitHub Actions, call the
-reusable workflow at `.github/workflows/molecule-reusable.yml` from this
-repository at a reviewed tag or commit. See `docs/role-integration.md` for a
-minimal caller workflow and OS-matrix pattern.
+## Uninstall
 
-Target instances are not controller images. A role chooses its own Molecule
-target images, such as Rocky Linux 9 or 10, based on its documented support;
-this repository does not impose an OS matrix on roles.
+Run `./uninstall.sh` to remove the venvs and any `libvirt` group membership
+added by the installer. RPM packages remain installed unless you explicitly
+run `./uninstall.sh --remove-host-packages`; that option removes only packages
+recorded as installed by this repository. Destroy KVM guests from their role
+scenarios before uninstalling.
 
-## Builds and Publishing
+Installer state is stored outside the clone under
+`${XDG_STATE_HOME:-~/.local/state}/idarsi-ansible-test-environments/`.
 
-`make build-current` creates a local image named
-`localhost/idarsi/ansible-test:ansible-current`. Central CI publishes
-version-labelled tags such as `ghcr.io/idarsi/ansible-test:2.20.8` and a
-convenience alias for the environment. Tags are mutable registry references;
-release-critical consumers should use a recorded image digest.
+## Maintain dependency pins
 
-Images are built from a digest-pinned Rocky Linux base. No credentials or
-secrets are copied into the image. CI smoke-tests and scans Ansible before
-publishing. A `vX.Y.Z` tag is the release trigger; maintainers must enable
-protected-tag rules, and publishing is gated on the tag being protected. Image
-version tags are taken from `versions.yml`, not from `vX.Y.Z`. CI also verifies
-the exported image checksum between scanning and publishing.
-
-## Dependency Updates
-
-`versions.yml` is authoritative for dependency pins. The update script
-synchronizes the three Builder definitions, Python requirement files, and
-Galaxy requirement files; `scripts/check-dependencies` verifies every generated
-location and is run by the dependency workflow.
-Every update is a reviewable pull request, followed by `make validate` and
-image smoke tests. Dependabot monitors GitHub Actions and pip dependencies;
-collection and base-image updates remain explicit because they need matrix
-validation and supply-chain review.
-
-Read `docs/dependency_policy.md` for the complete policy and security
-boundaries.
-
-## Repository Checks
+`versions.yml` is the source for the Ansible, Python, Molecule, and shared
+collection pins. Update the generated environment requirements with:
 
 ```bash
+scripts/update-dependencies
 make validate
-yamllint .
 ```
 
-The central build workflow validates and builds all three environments. The
-dependency workflow checks YAML, pin consistency, and container image
-vulnerabilities where the registry image is available.
+Role-specific collections belong in the role's own Galaxy requirements file;
+they are not installed globally by this repository. Repository checks run with
+`make validate` and `yamllint .`.
