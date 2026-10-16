@@ -1,6 +1,6 @@
 # Podman Molecule tests
 
-Podman is the quick target backend for role scenarios. On Rocky Linux 10,
+Podman is the quick target backend for role scenarios. On Rocky Linux 10 and Fedora 44,
 install the host tools and a selected Ansible environment with:
 
 ```bash

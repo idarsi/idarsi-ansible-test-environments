@@ -3,6 +3,7 @@
 ## Scope
 
 This repository installs the tools required to run Molecule on Rocky Linux 10
+or Fedora 44
 and provides a shared KVM + Kickstart guest lifecycle. It supports two target
 backends:
 
@@ -20,7 +21,7 @@ collections.
 
 ## Host setup
 
-`install.sh` is the entrypoint. `scripts/setup-host` installs selected Rocky
+`install.sh` is the entrypoint. `scripts/setup-host` installs selected supported-host
 Linux 10 RPM packages. The Podman profile installs Podman; the KVM profile
 installs QEMU/KVM and libvirt, starts the default libvirt network, and adds the
 invoking user to the `libvirt` group if needed. Firmware virtualization must be

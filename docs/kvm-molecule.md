@@ -5,7 +5,7 @@ The shared KVM lifecycle uses Molecule's built-in managed (default) driver and l
 it runs the shared create playbook, role converge and verify playbooks, then
 the shared destroy playbook. No KVM driver plugin is required.
 
-## Prepare Rocky Linux 10
+## Prepare the host (Rocky Linux 10 or Fedora 44)
 
 ```bash
 ./install.sh kvm ansible-current
@@ -25,11 +25,13 @@ virsh --connect qemu:///system net-info default
 
 ## Add the shared scenario
 
-Copy the example files into the role repository and edit the ISO path:
+Copy the example files into the role repository and edit the ISO path. Use the
+Kickstart template matching the guest distribution:
 
 ```text
 examples/molecule-kvm/molecule.yml       -> role/molecule/kvm/molecule.yml
 examples/molecule-kvm/rocky9-10.ks.tmpl  -> role/molecule/kvm/rocky9-10.ks.tmpl
+examples/molecule-kvm/fedora-44.ks.tmpl  -> role/molecule/kvm/fedora-44.ks.tmpl
 ```
 
 The KVM scenario also needs the role's existing converge and verify playbooks.
@@ -83,7 +85,7 @@ access; this tooling does not store subscription credentials.
 
 The `kvm-smoke` scenario exercises the shared VM lifecycle, SSH connection,
 Ansible converge and verify, SELinux enforcing mode, and guest cleanup. It
-requires a Rocky Linux 10 installation ISO available to libvirt:
+is configured for a Rocky Linux 10 installation ISO available to libvirt:
 
 ```bash
 source .venv/ansible-current/bin/activate
@@ -93,6 +95,8 @@ molecule test -s kvm-smoke
 
 Replace the example path with an ISO that already exists on the host. The
 installer prepares KVM software but does not download operating-system media.
+The smoke scenario defaults to Rocky Linux 10; use the Fedora Kickstart template
+in a role-specific scenario to test a Fedora 44 guest.
 
 To run the smoke test with verbose output and watch the guest's serial console
 at the same time, use the tmux wrapper:
