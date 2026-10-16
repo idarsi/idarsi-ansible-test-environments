@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 usage() {
-  printf 'Usage: %s <ansible-min|ansible-current|ansible-next> <Rocky-10.iso>\n' "$0" >&2
+  printf 'Usage: %s <ansible-min|ansible-current|ansible-next> <Rocky-10-or-Fedora-44.iso>\n' "$0" >&2
 }
 
 [[ $# -eq 2 ]] || { usage; exit 2; }

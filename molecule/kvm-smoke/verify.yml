@@ -16,6 +16,7 @@
     - name: Check the VM and its security baseline
       ansible.builtin.assert:
         that:
-          - ansible_facts.distribution == "Rocky"
+          - ansible_facts.distribution in ["Rocky", "Fedora"]
+          - (ansible_facts.distribution != "Fedora" or ansible_facts.distribution_major_version == "44")
           - smoke_marker.stat.exists
           - selinux_mode.stdout == "Enforcing"
