@@ -11,6 +11,10 @@ if [[ $# -gt 2 ]]; then
 fi
 
 "$repo_root/scripts/setup-host" install "$profile"
+if [[ "$profile" == kvm || "$profile" == all ]]; then
+  "$repo_root/scripts/prepare-kvm-install-source"
+  "$repo_root/scripts/prepare-kvm-base-images"
+fi
 "$repo_root/scripts/setup-venv" "$environment"
 
 printf '\nHost and Ansible tooling are ready. Start using them with:\n'

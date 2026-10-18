@@ -8,7 +8,7 @@ user --name=@@SSH_USER@@ --groups=wheel
 sshkey --username=@@SSH_USER@@ "@@SSH_PUBLIC_KEY@@"
 selinux --enforcing
 firewall --enabled --service=ssh
-network --bootproto=dhcp --device=link --activate
+@@NETWORK_CONFIGURATION@@
 bootloader --timeout=1
 zerombr
 clearpart --all --initlabel --drives=vda

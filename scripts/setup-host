@@ -19,8 +19,8 @@ profile=$2
 [[ "$action" == check || "$action" == install ]] || { usage; exit 2; }
 case "$profile" in
   podman) packages=(git python3.12 python3.12-pip openssh-clients tmux podman) ;;
-  kvm) packages=(git python3.12 python3.12-pip openssh-clients tmux qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
-  all) packages=(git python3.12 python3.12-pip openssh-clients tmux podman qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
+  kvm) packages=(curl git python3.12 python3.12-pip openssh-clients tmux qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
+  all) packages=(curl git python3.12 python3.12-pip openssh-clients tmux podman qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
   *) usage; exit 2 ;;
 esac
 
@@ -62,16 +62,21 @@ if [[ ( "$profile" == kvm || "$profile" == all ) && -n "$requesting_user" && "$r
   id -nG "$requesting_user" 2>/dev/null | tr ' ' '\n' | grep -qx libvirt || needs_libvirt_group=true
 fi
 needs_network=false
+needs_test_network=false
 needs_kvm_device=false
 if [[ "$profile" == kvm || "$profile" == all ]]; then
   network_info=$(virsh --connect qemu:///system net-info default 2>/dev/null || true)
   if [[ -z "$network_info" ]] || ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); active=$2} /^Autostart:/ {gsub(/[[:space:]]/, "", $2); autostart=$2} END {exit(active == "yes" && autostart == "yes" ? 0 : 1)}' <<<"$network_info"; then
     needs_network=true
   fi
+  test_network_info=$(virsh --connect qemu:///system net-info idarsi-test 2>/dev/null || true)
+  if [[ -z "$test_network_info" ]] || ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); active=$2} /^Autostart:/ {gsub(/[[:space:]]/, "", $2); autostart=$2} END {exit(active == "yes" && autostart == "yes" ? 0 : 1)}' <<<"$test_network_info"; then
+    needs_test_network=true
+  fi
   [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || needs_kvm_device=true
 fi
 
-if [[ ${#missing[@]} -eq 0 && $needs_libvirt == false && $needs_libvirt_group == false && $needs_network == false && $needs_kvm_device == false ]]; then
+if [[ ${#missing[@]} -eq 0 && $needs_libvirt == false && $needs_libvirt_group == false && $needs_network == false && $needs_test_network == false && $needs_kvm_device == false ]]; then
   printf 'All %s host requirements are ready.\n' "$profile"
   exit 0
 fi
@@ -86,6 +91,9 @@ if [[ $needs_libvirt_group == true ]]; then
 fi
 if [[ $needs_network == true ]]; then
   printf 'libvirt default network is not both active and set to autostart.\n' >&2
+fi
+if [[ $needs_test_network == true ]]; then
+  printf 'libvirt idarsi-test network is not both active and set to autostart.\n' >&2
 fi
 if [[ $needs_kvm_device == true ]]; then
   printf 'The current user cannot access /dev/kvm, or hardware virtualization is unavailable.\n' >&2
@@ -141,10 +149,18 @@ if [[ "$profile" == kvm || "$profile" == all ]]; then
     "${virsh_admin[@]}" net-start default
   fi
   "${virsh_admin[@]}" net-autostart default >/dev/null
+  if ! "${virsh_admin[@]}" net-info idarsi-test >/dev/null 2>&1; then
+    "${virsh_admin[@]}" net-define "$repo_root/config/idarsi-test-network.xml"
+  fi
+  test_network_info=$("${virsh_admin[@]}" net-info idarsi-test)
+  if ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); found=($2 == "yes")} END {exit(found ? 0 : 1)}' <<<"$test_network_info"; then
+    "${virsh_admin[@]}" net-start idarsi-test
+  fi
+  "${virsh_admin[@]}" net-autostart idarsi-test >/dev/null
   if [[ $needs_kvm_device == true ]]; then
     printf 'KVM packages are installed, but this session still cannot use /dev/kvm. Check firmware virtualization and device permissions.\n' >&2
   else
-    printf 'KVM packages and default libvirt network are ready.\n'
+    printf 'KVM packages and libvirt networks (default, idarsi-test) are ready.\n'
   fi
   if [[ $needs_libvirt_group == true ]]; then
     printf 'Added %s to the libvirt group; log out and back in before using KVM.\n' "$requesting_user"

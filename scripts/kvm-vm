@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'Usage: %s create <molecule-instance> <install-source> <kickstart-template>\n       %s destroy <molecule-instance>\n' "$0" "$0" >&2
+  printf 'Usage: %s create|destroy|stop|start <molecule-instance> [install-source kickstart-template]\n' "$0" >&2
 }
 
 [[ $# -ge 2 ]] || { usage; exit 2; }
@@ -21,6 +21,10 @@ shift 2
 uri=${KVM_LIBVIRT_URI:-qemu:///system}
 network=${KVM_NETWORK:-default}
 ssh_user=${KVM_SSH_USER:-molecule}
+ipv4_address=${KVM_IPV4_ADDRESS:-}
+gateway=${KVM_GATEWAY:-192.168.250.1}
+netmask=${KVM_NETMASK:-255.255.255.0}
+nameserver=${KVM_NAMESERVER:-192.168.250.1}
 key_file="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"
 hash=$(printf '%s' "$MOLECULE_EPHEMERAL_DIRECTORY" | sha256sum | cut -c1-8)
 domain="molecule-${instance}-${hash}"
@@ -28,11 +32,27 @@ domain=${domain:0:63}
 virsh_cmd=(virsh --connect "$uri")
 
 case "$action" in
+  stop|start)
+    [[ $# -eq 0 ]] || { usage; exit 2; }
+    domain="molecule-${instance}-${hash}"
+    if [[ "$action" == stop ]]; then
+      "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1 || { printf 'VM %s does not exist\n' "$domain" >&2; exit 1; }
+      "${virsh_cmd[@]}" destroy "$domain"
+    else
+      if [[ $("${virsh_cmd[@]}" domstate "$domain" 2>/dev/null || true) != running ]]; then
+        "${virsh_cmd[@]}" start "$domain"
+      fi
+    fi
+    ;;
   destroy)
     [[ $# -eq 0 ]] || { usage; exit 2; }
     if "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1; then
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
       "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage
+    fi
+    overlay=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}/${domain}.qcow2
+    if [[ -e "$overlay" ]]; then
+      rm -f -- "$overlay"
     fi
     printf 'Destroyed %s (%s) if it existed.\n' "$instance" "$domain"
     ;;
@@ -40,10 +60,8 @@ case "$action" in
     [[ $# -eq 2 ]] || { usage; exit 2; }
     install_source=$1
     kickstart_template=$2
-    [[ -n "$install_source" ]] || {
-      printf 'Install source is empty. Set install_source in molecule.yml; kvm-smoke uses IDARSI_TEST_KVM_INSTALL_SOURCE.\n' >&2
-      exit 2
-    }
+    base_mode=${KVM_BASE_IMAGE_MODE:-auto}
+    [[ "$base_mode" == auto || "$base_mode" == off ]] || { printf 'KVM_BASE_IMAGE_MODE must be auto or off\n' >&2; exit 2; }
     memory=${KVM_MEMORY_MB:-4096}
     vcpus=${KVM_VCPUS:-2}
     disk_size=${KVM_DISK_SIZE_GB:-30}
@@ -56,12 +74,11 @@ case "$action" in
     command -v virt-install >/dev/null || { printf 'virt-install is required; run make setup-host PROFILE=kvm\n' >&2; exit 1; }
     command -v ssh-keygen >/dev/null || { printf 'ssh-keygen is required; run make setup-host PROFILE=kvm\n' >&2; exit 1; }
     command -v timeout >/dev/null || { printf 'timeout is required\n' >&2; exit 1; }
-    if [[ "$install_source" != http://* && "$install_source" != https://* ]]; then
+    if [[ -n "$install_source" && "$install_source" != base-only:* && "$install_source" != http://* && "$install_source" != https://* ]]; then
       if [[ "$install_source" != /* ]]; then
         install_source="${MOLECULE_SCENARIO_DIRECTORY:-$PWD}/$install_source"
       fi
-      [[ -r "$install_source" ]] || { printf 'Install ISO or source path not found: %s\n' "$install_source" >&2; exit 1; }
-      install_source=$(realpath "$install_source")
+      if [[ -e "$install_source" ]]; then install_source=$(realpath "$install_source"); fi
     fi
     if [[ "$kickstart_template" != /* ]]; then
       base_dir=${MOLECULE_SCENARIO_DIRECTORY:-$PWD}
@@ -80,23 +97,86 @@ case "$action" in
     }
     network_state=$("${virsh_cmd[@]}" net-info "$network" | awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); print $2}')
     if [[ "$network_state" != yes ]]; then
-      "${virsh_cmd[@]}" net-start "$network"
+      "${virsh_cmd[@]}" net-start "$network" >&2
     fi
     if [[ ! -s "$key_file" ]]; then
       ssh-keygen -q -t ed25519 -N '' -C "molecule-$instance" -f "$key_file"
     fi
     chmod 600 "$key_file"
     public_key=$(<"$key_file.pub")
+    base_image=
+    base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
+    overlay="$base_dir/${domain}.qcow2"
+    if [[ "$base_mode" == auto ]]; then
+      command -v qemu-img >/dev/null || { printf 'qemu-img is required; run install.sh kvm.\n' >&2; exit 1; }
+      command -v virt-customize >/dev/null || { printf 'virt-customize is required; install libguestfs-tools-c with install.sh kvm.\n' >&2; exit 1; }
+      source_arg=$install_source
+      if [[ -z "$source_arg" ]]; then
+        os_key=$(basename "$kickstart_template" | sed -nE 's/.*rocky([0-9]+).*/rocky\1/ip' | tr '[:upper:]' '[:lower:]')
+        [[ -n "$os_key" ]] || { printf 'Cannot infer OS for base image; provide install_source.\n' >&2; exit 1; }
+        source_arg="base-only:$os_key"
+      fi
+      base_image=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-image" ensure "$source_arg" "$kickstart_template" "$ssh_user" "$disk_size" "$network" "$uri")
+      if [[ -e "$overlay" ]]; then
+        printf 'Per-VM overlay already exists: %s. Run molecule destroy first.\n' "$overlay" >&2
+        exit 1
+      fi
+      qemu-img create -f qcow2 -F qcow2 -b "$base_image" "$overlay" >/dev/null
+      virt-sysprep --operations defaults -a "$overlay" >&2
+      customize=(virt-customize -a "$overlay" --hostname "$instance" --ssh-inject "$ssh_user:file:$key_file.pub")
+      if [[ -n "$ipv4_address" ]]; then
+        network_file="$MOLECULE_EPHEMERAL_DIRECTORY/${domain}.nmconnection"
+        python3 - "$network_file" "$instance" "$ipv4_address" "$gateway" "$netmask" "$nameserver" <<'PY'
+import ipaddress
+import sys
+path, name, address, gateway, netmask, nameserver = sys.argv[1:]
+for value in (address, gateway, nameserver):
+    ipaddress.IPv4Address(value)
+prefix = ipaddress.IPv4Network(f"0.0.0.0/{netmask}").prefixlen
+with open(path, "w") as f:
+    f.write(f"[connection]\nid=idarsi-test-{name}\ntype=ethernet\nautoconnect=true\nautoconnect-priority=999\nmatch-device=type:ethernet\n")
+    f.write(f"[ipv4]\nmethod=manual\naddress1={address}/{prefix},{gateway}\ndns={nameserver};\n")
+    f.write("[ipv6]\nmethod=disabled\n")
+PY
+        customize+=(
+          --upload "$network_file:/etc/NetworkManager/system-connections/99-idarsi-test.nmconnection"
+          --chown 0:0:/etc/NetworkManager/system-connections/99-idarsi-test.nmconnection
+          --chmod 0600:/etc/NetworkManager/system-connections/99-idarsi-test.nmconnection
+        )
+      fi
+      customize+=(--selinux-relabel)
+      "${customize[@]}" >&2
+    else
+      [[ -n "$install_source" && "$install_source" != base-only:* ]] || { printf 'No compatible base image or ISO source is available. Run install.sh kvm and provide/download the Rocky ISO.\n' >&2; exit 1; }
+      [[ "$install_source" == http://* || "$install_source" == https://* || -r "$install_source" ]] || { printf 'Install ISO or source path not found: %s\n' "$install_source" >&2; exit 1; }
+    fi
+    network_configuration='network --bootproto=dhcp --device=link --activate'
+    if [[ -n "$ipv4_address" ]]; then
+      python3 - "$ipv4_address" "$gateway" "$netmask" "$nameserver" <<'PY'
+import ipaddress
+import sys
+
+address, gateway, netmask, nameserver = sys.argv[1:]
+for value in (address, gateway, nameserver):
+    ipaddress.IPv4Address(value)
+ipaddress.IPv4Network(f"0.0.0.0/{netmask}")
+PY
+      network_configuration="network --bootproto=static --ip=${ipv4_address} --netmask=${netmask} --gateway=${gateway} --nameserver=${nameserver} --device=link --activate"
+    fi
     rendered_kickstart="$MOLECULE_EPHEMERAL_DIRECTORY/${domain}.ks.cfg"
-    python3 - "$kickstart_template" "$rendered_kickstart" "$ssh_user" "$public_key" <<'PY'
+    python3 - "$kickstart_template" "$rendered_kickstart" "$ssh_user" "$public_key" "$network_configuration" <<'PY'
 from pathlib import Path
 import sys
 
-source, target, user, public_key = sys.argv[1:]
+source, target, user, public_key, network_configuration = sys.argv[1:]
 template = Path(source).read_text()
-rendered = template.replace("@@SSH_USER@@", user).replace("@@SSH_PUBLIC_KEY@@", public_key)
-if "@@SSH_" in rendered:
-    raise SystemExit("Kickstart template contains an unrecognized SSH placeholder")
+if "@@NETWORK_CONFIGURATION@@" not in template:
+    raise SystemExit("Kickstart template must contain @@NETWORK_CONFIGURATION@@")
+rendered = (template.replace("@@SSH_USER@@", user)
+            .replace("@@SSH_PUBLIC_KEY@@", public_key)
+            .replace("@@NETWORK_CONFIGURATION@@", network_configuration))
+if "@@" in rendered:
+    raise SystemExit("Kickstart template contains an unrecognized placeholder")
 Path(target).write_text(rendered)
 Path(target).chmod(0o600)
 PY
@@ -106,27 +186,49 @@ PY
     install_log="$log_root/${domain}.virt-install.log"
     deadline=$((SECONDS + timeout_seconds))
     virt_install_wait_minutes=$(((timeout_seconds + 59) / 60))
-    if ! virt-install --connect "$uri" \
+    disk_argument="size=${disk_size},format=qcow2,bus=virtio"
+    if [[ "$base_mode" == auto ]]; then
+      disk_argument="path=${overlay},format=qcow2,bus=virtio"
+    elif [[ -n ${KVM_DISK_PATH:-} ]]; then
+      disk_argument="path=${KVM_DISK_PATH},size=${disk_size},format=qcow2,bus=virtio"
+    fi
+    virt_install_args=(--connect "$uri" \
       --name "$domain" \
       --memory "$memory" \
       --vcpus "$vcpus" \
-      --disk "size=${disk_size},format=qcow2,bus=virtio" \
+      --disk "$disk_argument" \
       --network "network=${network},model=virtio" \
-      --location "$install_source" \
-      --initrd-inject "$rendered_kickstart" \
-      --extra-args "inst.ks=file:/$(basename "$rendered_kickstart") console=ttyS0,115200n8" \
       --os-variant generic \
       --graphics none \
-      --noautoconsole \
-      --wait "$virt_install_wait_minutes" >"$install_log" 2>&1; then
+      --noautoconsole)
+    if [[ "$base_mode" == auto ]]; then
+      virt_install_args+=(--import)
+    else
+      virt_install_args+=(--location "$install_source" --initrd-inject "$rendered_kickstart" --extra-args "inst.ks=file:/$(basename "$rendered_kickstart") console=ttyS0,115200n8" --wait "$virt_install_wait_minutes")
+    fi
+    virt-install "${virt_install_args[@]}" >"$install_log" 2>&1 &
+    virt_install_pid=$!
+    last_progress_notice=$SECONDS
+    while kill -0 "$virt_install_pid" 2>/dev/null; do
+      if ((SECONDS - last_progress_notice >= 30)); then
+        printf 'Still installing %s from its OS source; details: %s\n' "$instance" "$install_log" >&2
+        last_progress_notice=$SECONDS
+      fi
+      sleep 5
+    done
+    if ! wait "$virt_install_pid"; then
       printf 'virt-install failed. Install log: %s\n' "$install_log" >&2
       cat "$install_log" >&2
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
       "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage >/dev/null 2>&1 || true
+      if [[ "$base_mode" == auto ]]; then
+        rm -f -- "$overlay"
+      fi
       exit 1
     fi
 
-    address=''
+    address=$ipv4_address
+    last_progress_notice=$SECONDS
     while (( SECONDS < deadline )); do
       if "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1; then
         guest_state=$("${virsh_cmd[@]}" domstate "$domain" 2>/dev/null || true)
@@ -135,12 +237,19 @@ PY
             "$domain" "${guest_state:-unknown}" "$install_log" >&2
           exit 1
         fi
-        address=$("${virsh_cmd[@]}" domifaddr "$domain" --source lease --full 2>/dev/null | awk '$3 == "ipv4" {sub(/\/.*/, "", $4); print $4; exit}') || address=''
+        if [[ -z "$address" ]]; then
+          address=$("${virsh_cmd[@]}" domifaddr "$domain" --source lease --full 2>/dev/null | awk '$3 == "ipv4" {sub(/\/.*/, "", $4); print $4; exit}') || address=''
+        fi
         if [[ -n "$address" ]] && ssh -F /dev/null -i "$key_file" \
           -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null "$ssh_user@$address" true >/dev/null 2>&1; then
           break
         fi
+      fi
+      if ((SECONDS - last_progress_notice >= 30)); then
+        printf 'Waiting for SSH on %s (%s seconds elapsed); install log: %s\n' \
+          "$instance" "$((SECONDS - deadline + timeout_seconds))" "$install_log" >&2
+        last_progress_notice=$SECONDS
       fi
       sleep 5
     done
@@ -151,6 +260,9 @@ PY
       cat "$install_log" >&2
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
       "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage >/dev/null 2>&1 || true
+      if [[ "$base_mode" == auto ]]; then
+        rm -f -- "$overlay"
+      fi
       exit 1
     fi
     KVM_INSTANCE="$instance" KVM_ADDRESS="$address" KVM_USER="$ssh_user" KVM_KEY_FILE="$key_file" python3 - <<'PY'

@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+install_dir=/var/lib/libvirt/boot
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/idarsi-kvm-isos.XXXXXX")
+sudo_keepalive_pid=
+cleanup() {
+  if [[ -n "$sudo_keepalive_pid" ]]; then
+    kill "$sudo_keepalive_pid" 2>/dev/null || true
+    wait "$sudo_keepalive_pid" 2>/dev/null || true
+  fi
+  rm -rf -- "$work_dir"
+}
+trap cleanup EXIT
+
+declare -a labels=("Rocky Linux 9 Minimal" "Rocky Linux 10 Minimal")
+declare -a names=("Rocky-9-latest-x86_64-minimal.iso" "Rocky-10-latest-x86_64-minimal.iso")
+declare -a urls=("https://downloads.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9-latest-x86_64-minimal.iso" "https://download.rockylinux.org/pub/rocky/10/isos/x86_64/Rocky-10-latest-x86_64-minimal.iso")
+declare -a env_names=(IDARSI_TEST_KVM_INSTALL_SOURCE IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10)
+declare -a state_names=(.kvm-install-source .kvm-install-source-rocky10)
+declare -a fallbacks=(2755067904 2072444928)
+declare -a sources=("" "")
+declare -a downloads=() decisions=()
+
+save_source() {
+  local index=$1 source=$2
+  printf '%s\n' "$source" >"$repo_root/${state_names[$index]}"
+  sources[$index]=$source
+  printf '%s install source: %s\n' "${labels[$index]}" "$source"
+}
+
+find_existing_image() {
+  local pattern=$1 found=""
+  [[ -d "$install_dir" ]] || return 0
+  if [[ -r "$install_dir" && -x "$install_dir" ]]; then
+    found=$(find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V | tail -n 1)
+  else
+    found=$(sudo find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V | tail -n 1)
+  fi
+  if [[ -n "$found" ]]; then
+    if [[ ! -r "$install_dir" || ! -x "$install_dir" ]]; then sudo chmod 0755 "$install_dir"; fi
+    if [[ ! -r "$found" ]]; then sudo chmod 0644 "$found"; fi
+    printf '%s' "$found"
+  fi
+}
+
+remote_size() {
+  local url=$1 fallback=$2 headers bytes
+  headers=$(curl --fail --location --silent --show-error --head "$url" 2>/dev/null || true)
+  bytes=$(awk 'tolower($1) == "content-length:" {gsub("\r", "", $2); size=$2} END {print size}' <<<"$headers")
+  [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=$fallback
+  printf '%s\t%s\n' "$bytes" "$(awk -v bytes="$bytes" 'BEGIN {printf "%.2f GB / %.2f GiB", bytes/1000000000, bytes/1073741824}')"
+}
+
+# Discover and validate every source before asking about any download.
+for i in 0 1; do
+  configured=${!env_names[$i]:-}
+  if [[ -n "$configured" ]]; then
+    if [[ "$configured" == base-only:rocky* ]]; then
+      save_source "$i" "$configured"
+      continue
+    elif [[ "$configured" == http://* || "$configured" == https://* ]]; then
+      if curl --fail --location --silent --show-error --head "$configured" >/dev/null 2>&1; then
+        save_source "$i" "$configured"
+        continue
+      fi
+      printf 'Configured %s URL is unavailable: %s\n' "${labels[$i]}" "$configured" >&2
+    elif [[ -r "$configured" ]]; then
+      save_source "$i" "$(realpath "$configured")"
+      continue
+    else
+      printf 'Configured %s source is not readable: %s\n' "${labels[$i]}" "$configured" >&2
+    fi
+  fi
+
+  state_file="$repo_root/${state_names[$i]}"
+  if [[ -z "$configured" && -r "$state_file" ]]; then
+    IFS= read -r previous <"$state_file" || true
+    if [[ "$previous" == http://* || "$previous" == https://* ]]; then
+      if curl --fail --location --silent --show-error --head "$previous" >/dev/null 2>&1; then
+        sources[$i]=$previous
+        printf '%s install source: %s\n' "${labels[$i]}" "$previous"
+        continue
+      fi
+    elif [[ -r "$previous" ]]; then
+      sources[$i]=$previous
+      printf '%s install source: %s\n' "${labels[$i]}" "$previous"
+      continue
+    fi
+  fi
+
+  version=${names[$i]#Rocky-}
+  version=${version%%-*}
+  pattern="Rocky-${version}*-x86_64-minimal.iso"
+  existing=$(find_existing_image "$pattern")
+  if [[ -n "$existing" ]]; then
+    save_source "$i" "$existing"
+    continue
+  fi
+  os_key=rocky9
+  [[ $i -eq 1 ]] && os_key=rocky10
+  kickstart="$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl"
+  if cached_base=$("$repo_root/scripts/kvm-base-image" find "$os_key" "$kickstart" molecule 30 2>/dev/null); then
+    save_source "$i" "base-only:$os_key"
+    printf 'Compatible cached KVM base found for %s: %s\n' "${labels[$i]}" "$cached_base"
+    continue
+  fi
+  downloads+=("$i")
+done
+
+if ((${#downloads[@]} == 0)); then
+  printf 'All required KVM install sources are ready.\n'
+  exit 0
+fi
+
+declare -a byte_sizes=()
+printf '\nMissing KVM install images (no transfer will start until all prompts are answered):\n'
+for i in "${downloads[@]}"; do
+  IFS=$'\t' read -r bytes size < <(remote_size "${urls[$i]}" "${fallbacks[$i]}")
+  byte_sizes[$i]=$bytes
+  printf '  %s — %s (%s bytes)\n    %s\n' "${labels[$i]}" "$size" "$bytes" "${urls[$i]}"
+done
+
+for i in "${downloads[@]}"; do
+  read -r -p "Download ${labels[$i]} now? [y/N] " answer
+  case "$answer" in y|Y|yes|YES) decisions[$i]=yes ;; *) decisions[$i]=no ;; esac
+done
+
+approved=()
+for i in "${downloads[@]}"; do
+  if [[ ${decisions[$i]:-no} == yes ]]; then
+    approved+=("$i")
+  else
+    rm -f -- "$repo_root/${state_names[$i]}"
+    printf 'Skipped %s. Set %s before running a scenario that needs it.\n' "${labels[$i]}" "${env_names[$i]}"
+  fi
+done
+((${#approved[@]})) || exit 0
+
+if [[ $EUID -eq 0 ]]; then
+  mkdir -p "$install_dir"
+  chmod 0755 "$install_dir"
+else
+  sudo -v
+  sudo mkdir -p "$install_dir"
+  sudo chmod 0755 "$install_dir"
+  # Refresh sudo's timestamp during long ISO transfers so promotion can finish
+  # without asking for a password after the download has completed.
+  (while sleep 60; do sudo -n -v || exit 1; done) &
+  sudo_keepalive_pid=$!
+fi
+
+download_one() {
+  local i=$1 image=${names[$1]} url=${urls[$1]} dest="$install_dir/${names[$1]}" checksum_file="$work_dir/checksum-$1" part="$install_dir/${names[$1]}.part"
+  curl --fail --location --retry 3 --silent --show-error "${url}.CHECKSUM" --output "$checksum_file"
+  expected=$(sed -n "s/^SHA256 ($image) = \\([[:xdigit:]]\\{64\\}\\)$/\\1/p" "$checksum_file")
+  [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || { printf 'Could not read official SHA256 checksum for %s\n' "$image" >&2; return 1; }
+  actual=
+  if [[ -r "$part" ]]; then actual=$(sha256sum "$part" | awk '{print $1}'); fi
+  if [[ ${actual,,} != ${expected,,} ]]; then
+    # Always start a clean ISO transfer. Some mirrors ignore HTTP Range requests;
+    # appending a full response to a stale partial file creates an oversized ISO.
+    if [[ $EUID -eq 0 ]]; then curl --fail --location --retry 3 "$url" --output "$part"
+    else sudo -n curl --fail --location --retry 3 "$url" --output "$part"; fi
+    actual=$(sha256sum "$part" | awk '{print $1}')
+  else
+    printf 'Existing partial file for %s matches the official checksum; reusing it.\n' "$image"
+  fi
+  if [[ ${actual,,} != ${expected,,} ]]; then printf 'SHA256 verification failed for %s; partial file kept at %s (the next attempt restarts the transfer)\n' "$image" "$part" >&2; return 1; fi
+  if [[ $EUID -eq 0 ]]; then mv -- "$part" "$dest"; chmod 0644 "$dest"
+  else sudo -n mv -- "$part" "$dest"; sudo -n chmod 0644 "$dest"; fi
+}
+
+declare -A pids=()
+for i in "${approved[@]}"; do
+  (
+    if download_one "$i" >"$work_dir/download-$i.log" 2>&1; then
+      printf '0\n' >"$work_dir/status-$i"
+    else
+      printf '1\n' >"$work_dir/status-$i"
+    fi
+  ) &
+  pids[$i]=$!
+done
+
+printf '\nDownloading approved images in parallel:\n'
+while :; do
+  complete=0
+  progress=()
+  for i in "${approved[@]}"; do
+    part="$install_dir/${names[$i]}.part"
+    current=$(stat -c '%s' "$part" 2>/dev/null || printf '0')
+    total=${byte_sizes[$i]}
+    percent=$((current * 100 / total))
+    ((percent > 100)) && percent=100
+    progress+=("${labels[$i]}: $((current / 1048576)) MiB / $((total / 1048576)) MiB (${percent}%)")
+    [[ -f "$work_dir/status-$i" ]] && ((complete += 1))
+  done
+  progress_line=$(printf '%s | ' "${progress[@]}")
+  progress_line=${progress_line% | }
+  printf '\r  %s' "$progress_line"
+  ((complete == ${#approved[@]})) && break
+  sleep 1
+done
+printf '\n'
+
+failed=0
+for i in "${approved[@]}"; do
+  wait "${pids[$i]}" || true
+  if [[ $(<"$work_dir/status-$i") == 0 ]]; then
+    save_source "$i" "$install_dir/${names[$i]}"
+  else
+    failed=1
+    printf '\n%s download failed; log follows:\n' "${labels[$i]}" >&2
+    cat "$work_dir/download-$i.log" >&2
+  fi
+done
+exit "$failed"

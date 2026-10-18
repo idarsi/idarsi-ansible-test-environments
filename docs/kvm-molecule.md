@@ -13,15 +13,35 @@ source .venv/ansible-current/bin/activate
 ```
 
 This installs QEMU/KVM, libvirt, `virt-install`, SSH tools, `tmux`, and starts
-the default libvirt network when it is present. The host needs hardware
+the default and shared `idarsi-test` libvirt networks. The shared network uses
+`192.168.250.1/24`, NAT, and a DHCP pool of `.100` through `.199`; scenarios can
+assign stable addresses outside that pool. The host needs hardware
 virtualization enabled and a readable/writable `/dev/kvm`. Setup adds the
 invoking user to the `libvirt` group; log out and back in for that membership
 to take effect. Check the host before running Molecule:
 
 ```bash
 scripts/setup-host check kvm
-virsh --connect qemu:///system net-info default
+virsh --connect qemu:///system net-info idarsi-test
 ```
+
+The installer reuses configured sources and searches `/var/lib/libvirt/boot`
+for Rocky Linux 9 and 10 Minimal ISOs. It displays the sizes of all missing
+images and collects every download decision before starting any transfer.
+Accepted downloads run in parallel and each ISO is verified against its
+official SHA256 checksum. Rocky 9 is exported as
+`IDARSI_TEST_KVM_INSTALL_SOURCE`; Rocky 10 uses
+`IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10`.
+
+After ISO selection, `install.sh` creates a reusable OS-only base image in
+`/var/lib/libvirt/images/idarsi-test-bases`. It skips the ISO prompts when a
+compatible base already exists. Molecule creates a per-VM copy-on-write
+overlay from the base and sets the hostname, SSH key, and optional static
+network connection in that overlay. An ISO can also create the base lazily
+during the first Molecule run. Set `KVM_BASE_IMAGE_MODE=off` to force the
+original full ISO install path, or change `KVM_BASE_IMAGE_REVISION` to build a
+fresh base after changing OS preparation. The installer prepares the
+base-image directory so Molecule does not need an interactive sudo prompt.
 
 ## Add the shared scenario
 
@@ -53,23 +73,29 @@ Each platform entry in `molecule.yml` defines:
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `install_source` | Local installer ISO or HTTP(S) install tree | Required |
+| `install_source` | Local installer ISO or HTTP(S) install tree; optional if a compatible cached base exists | From activated venv |
 | `kickstart` | Kickstart template path, relative to the scenario | Required |
 | `memory_mb` | Guest memory in MiB | 4096 |
 | `vcpus` | Virtual CPU count | 2 |
-| `disk_size_gb` | New qcow2 disk size | 30 |
+| `disk_size_gb` | Base and overlay qcow2 virtual disk size | 30 |
 | `install_timeout` | Total seconds allowed for installation and SSH readiness | 3600 |
 | `ssh_user` | Temporary guest account | `molecule` |
 | `network` | Existing libvirt network | `default` |
+| `ipv4_address` | Static guest address; omit to use DHCP | unset |
+| `gateway` | Guest gateway when `ipv4_address` is set | `192.168.250.1` |
+| `netmask` | Guest IPv4 netmask when static | `255.255.255.0` |
+| `nameserver` | Guest DNS server when static | `192.168.250.1` |
 | `libvirt_uri` | libvirt connection URI | `qemu:///system` |
 
-The Kickstart template must use `@@SSH_USER@@` and `@@SSH_PUBLIC_KEY@@`. The
-create helper generates a temporary Ed25519 key in Molecule's ephemeral
-directory, renders those values, injects the Kickstart file into the installer
-initrd, and waits until it can log in over SSH. The guest must create that
-user with the supplied key and passwordless sudo. The example Kickstart keeps
-SELinux enforcing and the firewall enabled with SSH allowed, so roles can
-exercise host security settings in a real VM.
+The Kickstart template must use `@@SSH_USER@@`, `@@SSH_PUBLIC_KEY@@`, and
+`@@NETWORK_CONFIGURATION@@`. The shared template selects DHCP while the base
+image is installed. For each VM, the create helper generates a temporary
+Ed25519 key in Molecule's ephemeral directory and injects it into a writable
+overlay. It also sets that VM's hostname and, when requested, writes an
+individual NetworkManager connection for its static IPv4 address. It then
+waits until SSH is ready. The guest user has passwordless sudo. The example
+Kickstart keeps SELinux enforcing and the firewall enabled with SSH allowed,
+so roles can exercise host security settings in a real VM.
 
 The destroy playbook removes each named libvirt guest and its managed disk. VM
 names are scoped by a hash of the Molecule ephemeral directory so different
@@ -89,12 +115,12 @@ is configured for a Rocky Linux 10 installation ISO available to libvirt:
 
 ```bash
 source .venv/ansible-current/bin/activate
-export IDARSI_TEST_KVM_INSTALL_SOURCE=/path/to/Rocky-10-x86_64-dvd.iso
+export IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=/path/to/Rocky-10-x86_64-dvd.iso
 molecule test -s kvm-smoke
 ```
 
-Replace the example path with an ISO that already exists on the host. The
-installer prepares KVM software but does not download operating-system media.
+Replace the example path with an ISO that already exists on the host, or run
+`install.sh kvm` and accept the Rocky 10 Minimal image download.
 The smoke scenario defaults to Rocky Linux 10; use the Fedora Kickstart template
 in a role-specific scenario to test a Fedora 44 guest.
 
