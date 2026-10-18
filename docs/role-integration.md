@@ -12,6 +12,7 @@ Activate the desired venv in the shell, then run Molecule from the role repo:
 source /path/to/idarsi-ansible-test-environments/.venv/ansible-current/bin/activate
 cd /path/to/ansible-role
 molecule test
+ansible-lint --profile production
 ```
 
 The role's default Molecule scenario should target Podman for quick tests.

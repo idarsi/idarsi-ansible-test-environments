@@ -23,6 +23,7 @@ for environment in ansible-min ansible-current ansible-next; do
   for pin in \
     "ansible-core==$ansible_version" \
     "ansible-runner==$(awk -F'"' '/^ansible_runner:/{print $2}' "$versions")" \
+    "ansible-lint==$(awk -F'"' '/^ansible_lint:/{print $2}' "$versions")" \
     "molecule==$(awk -F'"' '/^molecule:/{print $2}' "$versions")" \
     "molecule-plugins[podman]==$(awk -F'"' '/^molecule_podman:/{print $2}' "$versions")"; do
     grep -Fxq "$pin" "$requirements" || {
@@ -52,4 +53,4 @@ for environment in ansible-min ansible-current ansible-next; do
   }
 done
 
-printf 'Ansible, Molecule, and collection pins are synchronized.\n'
+printf 'Ansible, Ansible Lint, Molecule, and collection pins are synchronized.\n'

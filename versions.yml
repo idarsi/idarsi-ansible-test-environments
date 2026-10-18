@@ -1,5 +1,5 @@
 schema: 1
-updated: "2026-10-15"
+updated: "2026-10-18"
 
 # These are the release lines tested by Idarsi roles. They are not a public
 # requirement for role users.
@@ -12,6 +12,7 @@ python:
   current: "3.12"
   next: "3.12"
 ansible_runner: "2.4.3"
+ansible_lint: "26.8.0"
 molecule: "26.8.0"
 molecule_podman: "26.7.15"
 collections:

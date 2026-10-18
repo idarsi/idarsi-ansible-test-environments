@@ -26,6 +26,7 @@ prepares both backends and installs the `ansible-current` venv:
 source .venv/ansible-current/bin/activate
 git clone https://github.com/idarsi/ansible-iac-role-postgresql.git
 cd ansible-iac-role-postgresql
+ansible-lint --profile production
 molecule test
 ```
 
@@ -60,11 +61,12 @@ creating its guests. Set `KVM_BASE_IMAGE_MODE=off` to use the legacy full ISO
 installation path. Set `KVM_BASE_IMAGE_REVISION` to a new value when you need
 to invalidate old base images.
 
-The available Ansible Core versions are pinned in [versions.yml](versions.yml):
+The available Ansible Core versions and shared Ansible Lint version are pinned
+in [versions.yml](versions.yml):
 `ansible-min` (2.19.12), `ansible-current` (2.20.8), and `ansible-next`
-(2.21.3). Each has a separate `.venv/` directory. Activate the chosen venv
-before running Molecule; activation exports the shared tooling path and
-collection path to the role's scenario.
+(2.21.3); Ansible Lint is 26.8.0 in each environment. Each has a separate
+`.venv/` directory. Activate the chosen venv before running Molecule; activation
+exports the shared tooling path and collection path to the role's scenario.
 
 Role repositories must define their Molecule scenarios to use the desired
 backend. See [role integration](docs/role-integration.md), the
@@ -91,8 +93,8 @@ Installer state is stored outside the clone under
 
 ## Maintain dependency pins
 
-`versions.yml` is the source for the Ansible, Python, Molecule, and shared
-collection pins. Update the generated environment requirements with:
+`versions.yml` is the source for the Ansible, Python, Ansible Lint, Molecule,
+and shared collection pins. Update the generated environment requirements with:
 
 ```bash
 scripts/update-dependencies
