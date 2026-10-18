@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
+cache_root=${XDG_CACHE_HOME:-$HOME/.cache}/idarsi-ansible-test-environments/kvm-base-locks
+revision=${KVM_BASE_IMAGE_REVISION:-1}
+
+usage() {
+  printf 'Usage: %s find <os-key> <kickstart-template> <ssh-user> <disk-size-gb>\n' "$0" >&2
+  printf '       %s ensure <install-source|base-only:os-key> <kickstart-template> <ssh-user> <disk-size-gb> <network> <libvirt-uri>\n' "$0" >&2
+}
+
+source_os_key() {
+  local source=$1 rocky_re='[Rr]ocky[-_/ ]?([0-9]+)' fedora_re='[Ff]edora[-_/ ]?([0-9]+)'
+  if [[ "$source" == base-only:* ]]; then
+    printf '%s' "${source#base-only:}"
+  elif [[ "$source" =~ $rocky_re ]]; then
+    printf 'rocky%s' "${BASH_REMATCH[1]}"
+  elif [[ "$source" =~ $fedora_re ]]; then
+    printf 'fedora%s' "${BASH_REMATCH[1]}"
+  else
+    printf '%s' "$(basename "$source" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_-' | cut -c1-32)"
+  fi
+}
+
+find_base() {
+  local os_key=$1 kickstart=$2 ssh_user=$3 disk_size=$4 kickstart_hash pattern candidate
+  [[ -r "$kickstart" ]] || return 1
+  kickstart_hash=$(sha256sum "$kickstart" | awk '{print $1}')
+  pattern="$base_dir/${os_key}-${disk_size}-${ssh_user}-${kickstart_hash:0:16}-*-r${revision}.qcow2"
+  shopt -s nullglob
+  local matches=( $pattern )
+  shopt -u nullglob
+  ((${#matches[@]})) || return 1
+  for candidate in "${matches[@]}"; do
+    [[ -s "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
+  done
+  return 1
+}
+
+ensure_libvirt_readable() {
+  local image=$1 mode
+  [[ -r "$image" ]] || {
+    printf 'KVM base image is not readable by the current user: %s\nRun ./install.sh kvm to repair its ownership and permissions.\n' "$image" >&2
+    return 1
+  }
+  mode=$(stat -c '%a' -- "$image") || return 1
+  if (( (8#$mode & 4) == 0 )); then
+    chmod o+r -- "$image" || {
+      printf 'KVM base image is not readable by libvirt: %s\nRun ./install.sh kvm to repair its ownership and permissions.\n' "$image" >&2
+      return 1
+    }
+  fi
+}
+
+[[ $# -ge 1 ]] || { usage; exit 2; }
+action=$1
+shift
+case "$action" in
+  find)
+    [[ $# -eq 4 ]] || { usage; exit 2; }
+    find_base "$1" "$2" "$3" "$4"
+    ;;
+  ensure)
+    [[ $# -eq 6 ]] || { usage; exit 2; }
+    install_source=$1
+    kickstart_template=$2
+    ssh_user=$3
+    disk_size=$4
+    network=$5
+    uri=$6
+    [[ "$disk_size" =~ ^[0-9]+$ && $disk_size -ge 10 ]] || { printf 'Base disk size must be at least 10 GB\n' >&2; exit 2; }
+    [[ -r "$kickstart_template" ]] || { printf 'Kickstart template is not readable: %s\n' "$kickstart_template" >&2; exit 1; }
+    os_key=$(source_os_key "$install_source")
+    [[ -n "$os_key" ]] || { printf 'Could not derive an OS key from install source: %s\n' "$install_source" >&2; exit 1; }
+    kickstart_hash=$(sha256sum "$kickstart_template" | awk '{print $1}')
+
+    source_hash=
+    if [[ "$install_source" != base-only:* && "$install_source" == /* && -f "$install_source" ]]; then
+      [[ -r "$install_source" ]] || {
+        printf 'Install source is not readable by the current user: %s\nRun ./install.sh kvm to prepare its permissions.\n' "$install_source" >&2
+        exit 1
+      }
+      source_hash=$(sha256sum "$install_source" | awk '{print $1}')
+    elif [[ "$install_source" == http://* || "$install_source" == https://* ]]; then
+      headers=$(curl --fail --location --silent --show-error --head "$install_source" 2>/dev/null || true)
+      remote_identity=$(awk 'tolower($1) ~ /^(etag|last-modified|content-length):$/ {gsub("\r", "", $2); printf "%s=%s;", tolower($1), $2}' <<<"$headers")
+      source_hash=$(printf '%s\n%s' "$install_source" "$remote_identity" | sha256sum | awk '{print $1}')
+    fi
+
+    if [[ -n "$source_hash" ]]; then
+      base_image="$base_dir/${os_key}-${disk_size}-${ssh_user}-${kickstart_hash:0:16}-${source_hash:0:16}-r${revision}.qcow2"
+    else
+      base_image=$(find_base "$os_key" "$kickstart_template" "$ssh_user" "$disk_size" || true)
+      if [[ -n "$base_image" ]]; then
+        ensure_libvirt_readable "$base_image"
+        printf 'Reusing compatible OS base image: %s\n' "$base_image" >&2
+        printf '%s\n' "$base_image"
+        exit 0
+      fi
+      printf 'No compatible %s base image exists and its install source is unavailable (%s). Run install.sh with an ISO source or provide install_source in the Molecule platform.\n' "$os_key" "$install_source" >&2
+      exit 1
+    fi
+
+    mkdir -p "$cache_root"
+    lock_file="$cache_root/${os_key}-${disk_size}-${ssh_user}-${kickstart_hash:0:16}.lock"
+    exec 9>"$lock_file"
+    flock 9
+    if [[ -e "$base_image" ]]; then
+      ensure_libvirt_readable "$base_image"
+      printf 'Using cached OS base image: %s\n' "$base_image" >&2
+      printf '%s\n' "$base_image"
+      exit 0
+    fi
+    [[ -d "$base_dir" && -w "$base_dir" ]] || {
+      printf 'KVM base-image directory is not writable: %s. Run install.sh kvm to prepare it.\n' "$base_dir" >&2
+      exit 1
+    }
+
+    command -v virt-sysprep >/dev/null || { printf 'virt-sysprep is required; install libguestfs-tools-c with install.sh kvm.\n' >&2; exit 1; }
+    command -v qemu-img >/dev/null || { printf 'qemu-img is required; install KVM packages with install.sh kvm.\n' >&2; exit 1; }
+    command -v flock >/dev/null || { printf 'flock is required to coordinate concurrent base-image creation.\n' >&2; exit 1; }
+    command -v ssh-keygen >/dev/null || { printf 'ssh-keygen is required.\n' >&2; exit 1; }
+
+    work_dir=$(mktemp -d "${TMPDIR:-/tmp}/idarsi-kvm-base.XXXXXX")
+    base_domain=
+    base_disk=
+    base_domain_defined=false
+    cleanup() {
+      if [[ "$base_domain_defined" == true ]]; then
+        virsh --connect "$uri" destroy "$base_domain" >/dev/null 2>&1 || true
+        virsh --connect "$uri" undefine "$base_domain" --remove-all-storage >/dev/null 2>&1 || true
+      fi
+      if [[ -n "$base_disk" && -e "$base_disk" && ! -e "$base_image" ]]; then
+        rm -f -- "$base_disk"
+      fi
+      rm -rf -- "$work_dir"
+    }
+    trap cleanup EXIT
+
+    work_hash=$(printf '%s' "$work_dir" | sha256sum | cut -c1-8)
+    base_domain="molecule-base-${os_key}-${kickstart_hash:0:8}-${work_hash}"
+    base_domain=${base_domain:0:63}
+    base_domain_defined=true
+    base_disk="$base_dir/.${base_image##*/}.${work_hash}.building.qcow2"
+    base_log_root=${KVM_LOG_DIR:-${TMPDIR:-/tmp}/idarsi-ansible-test-environments/kvm-logs}
+    mkdir -p "$base_log_root"
+    install_log="$base_log_root/${base_domain}.virt-install.log"
+    printf 'Building %s OS base image. This performs one ISO installation; log: %s\n' "$os_key" "$install_log" >&2
+    install_result=$(MOLECULE_EPHEMERAL_DIRECTORY="$work_dir" \
+      MOLECULE_SCENARIO_DIRECTORY="$(dirname "$kickstart_template")" \
+      KVM_BASE_IMAGE_MODE=off KVM_NETWORK="$network" KVM_IPV4_ADDRESS= \
+      KVM_MEMORY_MB="${KVM_BASE_MEMORY_MB:-2048}" KVM_VCPUS="${KVM_BASE_VCPUS:-2}" \
+      KVM_DISK_SIZE_GB="$disk_size" KVM_INSTALL_TIMEOUT="${KVM_INSTALL_TIMEOUT:-3600}" \
+      KVM_DISK_PATH="$base_disk" \
+      KVM_LIBVIRT_URI="$uri" KVM_SSH_USER="$ssh_user" KVM_LOG_DIR="$base_log_root" \
+      "$repo_root/scripts/kvm-vm" create "base-${os_key}-${kickstart_hash:0:8}" "$install_source" "$kickstart_template")
+    address=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["address"])' <<<"$install_result")
+    ssh_user_result=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["user"])' <<<"$install_result")
+    key_result=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["identity_file"])' <<<"$install_result")
+    virsh_cmd=(virsh --connect "$uri")
+    attached_disk=$("${virsh_cmd[@]}" domblklist "$base_domain" --details | awk 'NR > 2 && $2 == "disk" {print $4; exit}')
+    [[ "$attached_disk" == "$base_disk" ]] || { printf 'Unexpected base VM disk for %s: %s\n' "$base_domain" "$attached_disk" >&2; exit 1; }
+    printf 'Waiting for base guest shutdown before sealing %s.\n' "$os_key" >&2
+    ssh -F /dev/null -i "$key_result" -o BatchMode=yes -o ConnectTimeout=5 \
+      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      "$ssh_user_result@$address" 'sudo systemctl poweroff' >/dev/null 2>&1 || true
+    deadline=$((SECONDS + 180))
+    while ((SECONDS < deadline)); do
+      state=$("${virsh_cmd[@]}" domstate "$base_domain" 2>/dev/null || true)
+      [[ "$state" == "shut off" ]] && break
+      sleep 2
+    done
+    if [[ ${state:-} != "shut off" ]]; then
+      printf 'Base VM did not shut down cleanly; forcing shutdown before sealing.\n' >&2
+      "${virsh_cmd[@]}" destroy "$base_domain" >/dev/null
+    fi
+    "${virsh_cmd[@]}" undefine "$base_domain"
+    base_domain_defined=false
+    virt-sysprep --operations defaults -a "$base_disk" >&2
+    mv -- "$base_disk" "$base_image"
+    ensure_libvirt_readable "$base_image"
+    base_disk=
+    printf 'Created sealed OS base image: %s\n' "$base_image" >&2
+    printf '%s\n' "$base_image"
+    ;;
+  *) usage; exit 2 ;;
+esac

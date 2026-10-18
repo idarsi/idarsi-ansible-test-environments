@@ -16,7 +16,9 @@ molecule test
 
 The role's default Molecule scenario should target Podman for quick tests.
 Define a separate KVM scenario for full Rocky/RHEL VM testing, and run it with
-`molecule test -s kvm`. The KVM scenario can reference shared lifecycle
+`molecule test -s kvm`. The shared `idarsi-test` NAT network provides guest
+connectivity. Scenarios may set `ipv4_address` on a platform when stable
+addresses are needed for cluster tests; DHCP remains the default. The KVM scenario can reference shared lifecycle
 playbooks through the `IDARSI_TEST_ENVIRONMENT` variable set during venv
 activation:
 

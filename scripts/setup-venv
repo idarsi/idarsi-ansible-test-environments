@@ -47,5 +47,13 @@ case ":\${ANSIBLE_COLLECTIONS_PATH:-}:" in
   *) export ANSIBLE_COLLECTIONS_PATH="\$_idarsi_collections_path\${ANSIBLE_COLLECTIONS_PATH:+:\$ANSIBLE_COLLECTIONS_PATH}" ;;
 esac
 unset _idarsi_collections_path
+if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE:-} && -r $(printf '%q' "$repo_root/.kvm-install-source") ]]; then
+  IFS= read -r IDARSI_TEST_KVM_INSTALL_SOURCE <$(printf '%q' "$repo_root/.kvm-install-source")
+  export IDARSI_TEST_KVM_INSTALL_SOURCE
+fi
+if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10:-} && -r $(printf '%q' "$repo_root/.kvm-install-source-rocky10") ]]; then
+  IFS= read -r IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 <$(printf '%q' "$repo_root/.kvm-install-source-rocky10")
+  export IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10
+fi
 ACTIVATE_HOOK
 printf 'Created %s\nActivate with: source %s/bin/activate\n' "$venv" "$venv"

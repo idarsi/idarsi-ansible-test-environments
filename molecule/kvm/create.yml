@@ -2,6 +2,7 @@
 - name: Create KVM guests for Molecule
   hosts: localhost
   connection: local
+  become: false
   gather_facts: false
   vars:
     molecule_config: "{{ lookup('file', lookup('env', 'MOLECULE_FILE')) | from_yaml }}"
@@ -15,18 +16,6 @@
           - molecule_config.platforms | length > 0
           - test_environment | length > 0
 
-    - name: Require an installation source for each VM
-      ansible.builtin.assert:
-        that:
-          - item.install_source | default('') | string | length > 0
-        fail_msg: >-
-          Platform {{ item.name }} has no install_source. Set it to an installer
-          ISO or install tree; the kvm-smoke scenario reads it from
-          IDARSI_TEST_KVM_INSTALL_SOURCE.
-      loop: "{{ molecule_config.platforms }}"
-      loop_control:
-        label: "{{ item.name }}"
-
     - name: Provision all configured guests
       block:
         - name: Create VM and wait for SSH
@@ -35,14 +24,18 @@
               - "{{ test_environment }}/scripts/kvm-vm"
               - create
               - "{{ item.name }}"
-              - "{{ item.install_source }}"
-              - "{{ molecule_scenario_directory }}/{{ item.kickstart }}"
+              - "{{ item.install_source | default('') }}"
+              - "{{ item.kickstart if item.kickstart.startswith('/') else molecule_scenario_directory ~ '/' ~ item.kickstart }}"
           environment:
             MOLECULE_EPHEMERAL_DIRECTORY: "{{ molecule_ephemeral_directory }}"
             MOLECULE_SCENARIO_DIRECTORY: "{{ molecule_scenario_directory }}"
             KVM_LIBVIRT_URI: "{{ item.libvirt_uri | default(molecule_config.driver.libvirt_uri | default('qemu:///system')) }}"
             KVM_NETWORK: "{{ item.network | default('default') }}"
             KVM_SSH_USER: "{{ item.ssh_user | default('molecule') }}"
+            KVM_IPV4_ADDRESS: "{{ item.ipv4_address | default('') }}"
+            KVM_GATEWAY: "{{ item.gateway | default('192.168.250.1') }}"
+            KVM_NETMASK: "{{ item.netmask | default('255.255.255.0') }}"
+            KVM_NAMESERVER: "{{ item.nameserver | default('192.168.250.1') }}"
             KVM_MEMORY_MB: "{{ item.memory_mb | default(4096) }}"
             KVM_VCPUS: "{{ item.vcpus | default(2) }}"
             KVM_DISK_SIZE_GB: "{{ item.disk_size_gb | default(30) }}"
@@ -50,11 +43,13 @@
           loop: "{{ molecule_config.platforms }}"
           loop_control:
             label: "{{ item.name }}"
+          async: "{{ 2 * (item.install_timeout | default(3600) | int) + 900 }}"
+          poll: 15
           register: molecule_kvm_create
 
         - name: Collect instance connection details
           ansible.builtin.set_fact:
-            molecule_instance_config: "{{ molecule_kvm_create.results | map(attribute='stdout') | map('from_json') | list }}"
+            molecule_instance_config: "{{ molecule_kvm_create.results | map(attribute='stdout_lines') | map('last') | map('from_json') | list }}"
 
         - name: Write Molecule instance configuration
           ansible.builtin.copy:

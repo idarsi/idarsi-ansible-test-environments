@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+kickstart="$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl"
+base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
+base_owner=${SUDO_USER:-$(id -un)}
+declare -a states=(.kvm-install-source .kvm-install-source-rocky10)
+declare -a keys=(rocky9 rocky10)
+
+if [[ $EUID -eq 0 ]]; then
+  mkdir -p "$base_dir"
+  chown "$base_owner:libvirt" "$base_dir"
+  chmod 0755 "$base_dir"
+  find "$base_dir" -maxdepth 1 -type f -name '*.qcow2' -exec chown "$base_owner:libvirt" {} + -exec chmod 0644 {} +
+  command -v restorecon >/dev/null && restorecon -RF "$base_dir" || true
+else
+  sudo -v
+  sudo mkdir -p "$base_dir"
+  sudo chown "$base_owner:libvirt" "$base_dir"
+  sudo chmod 0755 "$base_dir"
+  sudo find "$base_dir" -maxdepth 1 -type f -name '*.qcow2' -exec chown "$base_owner:libvirt" {} + -exec chmod 0644 {} +
+  sudo restorecon -RF "$base_dir" 2>/dev/null || true
+fi
+
+ready=0
+for i in 0 1; do
+  state_file="$repo_root/${states[$i]}"
+  [[ -r "$state_file" ]] || continue
+  IFS= read -r source <"$state_file" || true
+  [[ -n "$source" ]] || continue
+  printf '\nPreparing reusable %s KVM base image.\n' "${keys[$i]}"
+  "$repo_root/scripts/kvm-base-image" ensure "$source" "$kickstart" molecule "${KVM_BASE_DISK_SIZE_GB:-30}" "${KVM_NETWORK:-idarsi-test}" "${KVM_LIBVIRT_URI:-qemu:///system}"
+  ready=$((ready + 1))
+done
+
+if ((ready == 0)); then
+  printf '\nNo ISO source or cached base was selected; base-image preparation was skipped.\n'
+else
+  printf '\nReusable KVM base-image preparation finished.\n'
+fi
