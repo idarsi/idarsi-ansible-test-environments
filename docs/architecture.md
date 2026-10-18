@@ -31,9 +31,9 @@ addresses. Firmware virtualization must be enabled separately. Group changes
 take effect after a new login.
 
 `scripts/setup-venv` creates an isolated Python environment with the selected
-ansible-core, Molecule, Runner, Podman plugin, and the common `ansible.posix`
-and `containers.podman` collections. A role installs any additional Galaxy
-collections from its own requirements file.
+ansible-core, Ansible Lint, Molecule, Runner, Podman plugin, and the common
+`ansible.posix` and `containers.podman` collections. A role installs any
+additional Galaxy collections from its own requirements file.
 
 ## KVM base images
 

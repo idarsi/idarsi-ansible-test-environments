@@ -2,10 +2,10 @@
 
 ## Shared environment
 
-The virtual environments pin ansible-core, Molecule, Ansible Runner, the
-Molecule Podman plugin, and the small set of collections needed by the shared
-test setup. `versions.yml` is the source of truth; generated requirements are
-checked by `scripts/check-dependencies`.
+The virtual environments pin ansible-core, Ansible Lint, Molecule, Ansible
+Runner, the Molecule Podman plugin, and the small set of collections needed by
+the shared test setup. `versions.yml` is the source of truth; generated
+requirements are checked by `scripts/check-dependencies`.
 
 The common collections are `ansible.posix` and `containers.podman`. Roles
 should prefer `ansible.builtin.*`; additional collections belong in the role's

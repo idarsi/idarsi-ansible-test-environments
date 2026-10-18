@@ -1,6 +1,6 @@
 # Contributing
 
-Dependency changes affect the shared Molecule environment. Update
+Dependency changes affect the shared test environment. Update
 `versions.yml`, run `scripts/update-dependencies`, and review all generated
 requirements. Before submitting, run:
 
