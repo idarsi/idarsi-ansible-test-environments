@@ -12,20 +12,33 @@ the shared destroy playbook. No KVM driver plugin is required.
 source .venv/ansible-current/bin/activate
 ```
 
-This installs QEMU/KVM, libvirt, `virt-install`, SSH tools, `tmux`, and starts
-the default libvirt network when it is present. The host needs hardware
+This installs QEMU/KVM, libvirt, `virt-install`, SSH tools, `tmux`, starts the
+default libvirt network, provisions the shared `idarsi-test` NAT network
+(`192.168.250.0/24`), and downloads the Rocky Linux 10 DVD ISO to
+`~/.cache/idarsi-ansible-test-environments/isos/Rocky-10-latest-x86_64-dvd.iso` if it
+is not already cached.
+Existing ISO files are preserved. The ISO URL and path can be overridden with
+`IDARSI_TEST_KVM_ISO_URL` and `IDARSI_TEST_KVM_ISO_PATH`. The host needs hardware
 virtualization enabled and a readable/writable `/dev/kvm`. Setup adds the
 invoking user to the `libvirt` group; log out and back in for that membership
 to take effect. Check the host before running Molecule:
 
+When setup downloads the ISO, it verifies Rocky's detached `CHECKSUM.asc`
+signature using the Rocky 10 signing key already installed at
+`/etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10`, then checks the signed SHA-256 entry.
+The KVM setup installs `gnupg2` for this verification. The cached ISO is public
+installation media and intentionally has mode `0644` so libvirt can read it;
+the cache contains no credentials or other private data.
+
 ```bash
 scripts/setup-host check kvm
 virsh --connect qemu:///system net-info default
+virsh --connect qemu:///system net-info idarsi-test
 ```
 
 ## Add the shared scenario
 
-Copy the example files into the role repository and edit the ISO path:
+Copy the example files into the role repository:
 
 ```text
 examples/molecule-kvm/molecule.yml       -> role/molecule/kvm/molecule.yml
@@ -51,7 +64,7 @@ Each platform entry in `molecule.yml` defines:
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `install_source` | Local installer ISO or HTTP(S) install tree | Required |
+| `install_source` | Local installer ISO or HTTP(S) install tree | Cached ISO via `IDARSI_TEST_KVM_INSTALL_SOURCE` |
 | `kickstart` | Kickstart template path, relative to the scenario | Required |
 | `memory_mb` | Guest memory in MiB | 4096 |
 | `vcpus` | Virtual CPU count | 2 |
@@ -83,16 +96,15 @@ access; this tooling does not store subscription credentials.
 
 The `kvm-smoke` scenario exercises the shared VM lifecycle, SSH connection,
 Ansible converge and verify, SELinux enforcing mode, and guest cleanup. It
-requires a Rocky Linux 10 installation ISO available to libvirt:
+uses the automatically cached Rocky Linux 10 installation ISO:
 
 ```bash
 source .venv/ansible-current/bin/activate
-export IDARSI_TEST_KVM_INSTALL_SOURCE=/path/to/Rocky-10-x86_64-dvd.iso
 molecule test -s kvm-smoke
 ```
 
-Replace the example path with an ISO that already exists on the host. The
-installer prepares KVM software but does not download operating-system media.
+Set `IDARSI_TEST_KVM_INSTALL_SOURCE` before activating the environment to use a
+different local ISO or HTTP(S) installation tree.
 
 To run the smoke test with verbose output and watch the guest's serial console
 at the same time, use the tmux wrapper:

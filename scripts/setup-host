@@ -8,6 +8,10 @@ state_user_home=${state_user_home:-$HOME}
 state_home=${XDG_STATE_HOME:-$state_user_home/.local/state}
 repo_id=$(printf '%s' "$repo_root" | sha256sum | cut -c1-16)
 state_dir="$state_home/idarsi-ansible-test-environments/$repo_id"
+iso_dir=${IDARSI_TEST_KVM_ISO_DIR:-$state_user_home/.cache/idarsi-ansible-test-environments/isos}
+iso_path=${IDARSI_TEST_KVM_ISO_PATH:-$iso_dir/Rocky-10-latest-x86_64-dvd.iso}
+iso_url=${IDARSI_TEST_KVM_ISO_URL:-https://download.rockylinux.org/pub/rocky/10/isos/x86_64/Rocky-10-latest-x86_64-dvd.iso}
+iso_filename=$(basename "${iso_url%%\?*}")
 
 usage() {
   printf 'Usage: %s check|install podman|kvm|all\n' "$0" >&2
@@ -19,8 +23,8 @@ profile=$2
 [[ "$action" == check || "$action" == install ]] || { usage; exit 2; }
 case "$profile" in
   podman) packages=(git python3.12 python3.12-pip openssh-clients tmux podman) ;;
-  kvm) packages=(git python3.12 python3.12-pip openssh-clients tmux qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
-  all) packages=(git python3.12 python3.12-pip openssh-clients tmux podman qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
+  kvm) packages=(git python3.12 python3.12-pip openssh-clients tmux curl gnupg2 qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
+  all) packages=(git python3.12 python3.12-pip openssh-clients tmux curl gnupg2 podman qemu-kvm libvirt libvirt-daemon-kvm libvirt-daemon-config-network virt-install virt-viewer libguestfs-tools-c) ;;
   *) usage; exit 2 ;;
 esac
 
@@ -57,16 +61,52 @@ if [[ ( "$profile" == kvm || "$profile" == all ) && -n "$requesting_user" && "$r
   id -nG "$requesting_user" 2>/dev/null | tr ' ' '\n' | grep -qx libvirt || needs_libvirt_group=true
 fi
 needs_network=false
+needs_test_network=false
 needs_kvm_device=false
+needs_iso=false
 if [[ "$profile" == kvm || "$profile" == all ]]; then
   network_info=$(virsh --connect qemu:///system net-info default 2>/dev/null || true)
   if [[ -z "$network_info" ]] || ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); active=$2} /^Autostart:/ {gsub(/[[:space:]]/, "", $2); autostart=$2} END {exit(active == "yes" && autostart == "yes" ? 0 : 1)}' <<<"$network_info"; then
     needs_network=true
   fi
+  test_network_info=$(virsh --connect qemu:///system net-info idarsi-test 2>/dev/null || true)
+  if [[ -z "$test_network_info" ]]; then
+    needs_test_network=true
+  else
+    if ! virsh --connect qemu:///system net-dumpxml idarsi-test | python3 "$repo_root/scripts/validate-libvirt-network"; then
+      printf 'Existing libvirt idarsi-test network does not match required NAT configuration; refusing to modify it.\n' >&2
+      exit 1
+    fi
+  fi
   [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || needs_kvm_device=true
+  iso_checksums="$iso_path.CHECKSUM"
+  iso_signature="$iso_checksums.asc"
+  if [[ -s "$iso_path" && -s "$iso_checksums" && -s "$iso_signature" ]]; then
+    if ! "$repo_root/scripts/verify-rocky-checksum" "$iso_checksums" "$iso_signature" >/dev/null 2>&1; then
+      needs_iso=true
+    else
+      cached_sha=$(python3 - "$iso_checksums" "$iso_filename" <<'PY'
+import re
+import sys
+
+filename = re.escape(sys.argv[2])
+pattern = re.compile(rf"^SHA256 \({filename}\) = ([0-9a-fA-F]{{64}})$")
+for line in open(sys.argv[1], encoding="utf-8"):
+    match = pattern.fullmatch(line.rstrip("\n"))
+    if match:
+        print(match.group(1))
+        break
+PY
+)
+      cached_actual=$(sha256sum "$iso_path" | awk '{print $1}')
+      [[ "$cached_sha" =~ ^[[:xdigit:]]{64}$ && "${cached_actual,,}" == "${cached_sha,,}" ]] || needs_iso=true
+    fi
+  else
+    needs_iso=true
+  fi
 fi
 
-if [[ ${#missing[@]} -eq 0 && $needs_libvirt == false && $needs_libvirt_group == false && $needs_network == false && $needs_kvm_device == false ]]; then
+if [[ ${#missing[@]} -eq 0 && $needs_libvirt == false && $needs_libvirt_group == false && $needs_network == false && $needs_test_network == false && $needs_kvm_device == false && $needs_iso == false ]]; then
   printf 'All %s host requirements are ready.\n' "$profile"
   exit 0
 fi
@@ -82,8 +122,14 @@ fi
 if [[ $needs_network == true ]]; then
   printf 'libvirt default network is not both active and set to autostart.\n' >&2
 fi
+if [[ $needs_test_network == true ]]; then
+  printf 'libvirt idarsi-test network is not installed.\n' >&2
+fi
 if [[ $needs_kvm_device == true ]]; then
   printf 'The current user cannot access /dev/kvm, or hardware virtualization is unavailable.\n' >&2
+fi
+if [[ $needs_iso == true ]]; then
+  printf 'Rocky Linux installer ISO is missing: %s\n' "$iso_path"
 fi
 [[ "$action" == install ]] || exit 1
 
@@ -103,6 +149,75 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 
 if [[ "$profile" == kvm || "$profile" == all ]]; then
+  if [[ $needs_iso == true ]]; then
+    command -v curl >/dev/null || { printf 'curl is required to download the Rocky installer ISO\n' >&2; exit 1; }
+    command -v sha256sum >/dev/null || { printf 'sha256sum is required to verify the Rocky installer ISO\n' >&2; exit 1; }
+    mkdir -p "$(dirname "$iso_path")"
+    partial_dir=$(mktemp -d "$(dirname "$iso_path")/.rocky-iso.XXXXXX")
+    partial_iso="$partial_dir/$iso_filename"
+    partial_checksums="$partial_dir/CHECKSUM"
+    partial_signature="$partial_dir/CHECKSUM.asc"
+    trap 'rm -rf "${partial_dir:-}"' EXIT
+    curl --fail --location --retry 3 --output "$partial_iso" "$iso_url"
+    [[ -s "$partial_iso" ]] || { printf 'Downloaded installer ISO is empty\n' >&2; exit 1; }
+    curl --fail --location --retry 3 --output "$partial_checksums" "${iso_url%/*}/CHECKSUM"
+    curl --fail --location --retry 3 --output "$partial_signature" "${iso_url%/*}/CHECKSUM.asc"
+    "$repo_root/scripts/verify-rocky-checksum" "$partial_checksums" "$partial_signature"
+    expected_sha=$(python3 - "$partial_checksums" "$iso_filename" <<'PY'
+import re
+import sys
+
+filename = re.escape(sys.argv[2])
+pattern = re.compile(rf"^SHA256 \({filename}\) = ([0-9a-fA-F]{{64}})$")
+for line in open(sys.argv[1], encoding="utf-8"):
+    match = pattern.fullmatch(line.rstrip("\n"))
+    if match:
+        print(match.group(1))
+        break
+PY
+)
+    [[ "$expected_sha" =~ ^[[:xdigit:]]{64}$ ]] || { printf 'Official CHECKSUM does not contain a SHA-256 entry for %s\n' "$iso_filename" >&2; exit 1; }
+    actual_sha=$(sha256sum "$partial_iso" | awk '{print $1}')
+    [[ "${actual_sha,,}" == "${expected_sha,,}" ]] || { printf 'Rocky installer ISO SHA-256 verification failed\n' >&2; exit 1; }
+    chmod 0644 "$partial_iso"
+    # Keep old cache entries until all replacements have been published. If
+    # any rename fails, restore the complete previous generation (or remove
+    # newly-created entries when there was no previous generation).
+    backup_dir="$partial_dir/previous"
+    mkdir "$backup_dir"
+    backed_up_paths=()
+    published_paths=()
+    rollback_publish() {
+      local target name
+      for target in "${published_paths[@]}"; do
+        rm -f -- "$target"
+      done
+      for target in "${backed_up_paths[@]}"; do
+        name=$(basename "$target")
+        if [[ -e "$backup_dir/$name" ]]; then
+          mv -- "$backup_dir/$name" "$target" || printf 'Failed to restore previous ISO cache entry: %s\n' "$target" >&2
+        fi
+      done
+    }
+    trap 'rollback_publish; rm -rf "${partial_dir:-}"' EXIT
+    for target in "$iso_checksums" "$iso_signature" "$iso_path"; do
+      if [[ -e "$target" ]]; then
+        backed_up_paths+=("$target")
+        mv -- "$target" "$backup_dir/$(basename "$target")"
+      fi
+    done
+    published_paths+=("$iso_checksums")
+    mv -- "$partial_checksums" "$iso_checksums"
+    published_paths+=("$iso_signature")
+    mv -- "$partial_signature" "$iso_signature"
+    published_paths+=("$iso_path")
+    mv -- "$partial_iso" "$iso_path"
+    unset partial_iso partial_checksums partial_signature
+    # Publishing succeeded; old user data can now be discarded.
+    rm -rf -- "$backup_dir" "$partial_dir"
+    unset partial_dir
+    trap - EXIT
+  fi
   if [[ $needs_libvirt_group == true ]]; then
     if [[ $EUID -eq 0 ]]; then
       usermod -aG libvirt "$requesting_user"
@@ -136,10 +251,34 @@ if [[ "$profile" == kvm || "$profile" == all ]]; then
     "${virsh_admin[@]}" net-start default
   fi
   "${virsh_admin[@]}" net-autostart default >/dev/null
+  if [[ $needs_test_network == true ]]; then
+    network_xml=$(mktemp)
+    trap 'rm -f "$network_xml"' EXIT
+    cat >"$network_xml" <<'XML'
+<network>
+  <name>idarsi-test</name>
+  <forward mode='nat'/>
+  <bridge name='virbr250' stp='on' delay='0'/>
+  <ip address='192.168.250.1' netmask='255.255.255.0'>
+    <dhcp><range start='192.168.250.2' end='192.168.250.199'/></dhcp>
+  </ip>
+</network>
+XML
+    if ! python3 "$repo_root/scripts/validate-libvirt-network" <"$network_xml"; then
+      printf 'idarsi-test network conflicts with an existing network or route; refusing to define it.\n' >&2
+      exit 1
+    fi
+    "${virsh_admin[@]}" net-define "$network_xml"
+  fi
+  network_info=$("${virsh_admin[@]}" net-info idarsi-test)
+  if ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); found=($2 == "yes")} END {exit(found ? 0 : 1)}' <<<"$network_info"; then
+    "${virsh_admin[@]}" net-start idarsi-test
+  fi
+  "${virsh_admin[@]}" net-autostart idarsi-test >/dev/null
   if [[ $needs_kvm_device == true ]]; then
     printf 'KVM packages are installed, but this session still cannot use /dev/kvm. Check firmware virtualization and device permissions.\n' >&2
   else
-    printf 'KVM packages and default libvirt network are ready.\n'
+    printf 'KVM packages, libvirt networks, and Rocky installer ISO are ready.\n'
   fi
   if [[ $needs_libvirt_group == true ]]; then
     printf 'Added %s to the libvirt group; log out and back in before using KVM.\n' "$requesting_user"

@@ -32,6 +32,12 @@ cat >>"$venv/bin/activate" <<ACTIVATE_HOOK
 
 # Idarsi Ansible test environment integration.
 export IDARSI_TEST_ENVIRONMENT=$(printf '%q' "$repo_root")
+_idarsi_kvm_iso_path=\${IDARSI_TEST_KVM_ISO_PATH:-\${IDARSI_TEST_KVM_ISO_DIR:-$(printf '%q' "$HOME/.cache/idarsi-ansible-test-environments/isos")/Rocky-10-latest-x86_64-dvd.iso}}
+export IDARSI_TEST_KVM_ISO_PATH="\$_idarsi_kvm_iso_path"
+if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE:-} && -s "\$_idarsi_kvm_iso_path" ]]; then
+  export IDARSI_TEST_KVM_INSTALL_SOURCE="\$_idarsi_kvm_iso_path"
+fi
+unset _idarsi_kvm_iso_path
 _idarsi_collections_path=$(printf '%q' "$venv/collections")
 case ":\${ANSIBLE_COLLECTIONS_PATH:-}:" in
   *":\$_idarsi_collections_path:"*) ;;

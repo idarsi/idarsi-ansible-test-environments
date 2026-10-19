@@ -14,7 +14,7 @@ ansible:
 
 platforms:
   - name: rocky10
-    install_source: /var/lib/libvirt/boot/Rocky-10-x86_64-dvd.iso
+    install_source: "${IDARSI_TEST_KVM_INSTALL_SOURCE}"
     kickstart: rocky9-10.ks.tmpl
     memory_mb: 4096
     vcpus: 2

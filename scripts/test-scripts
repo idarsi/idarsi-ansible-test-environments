@@ -2,7 +2,59 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-for script in install.sh uninstall.sh verify-install-kvm.sh scripts/setup-host scripts/setup-venv scripts/kvm-vm scripts/kvm-smoke-tmux scripts/kvm-console-wait scripts/check-dependencies scripts/update-dependencies scripts/test-scripts; do
+for script in install.sh uninstall.sh verify-install-kvm.sh scripts/setup-host scripts/verify-rocky-checksum scripts/setup-venv scripts/kvm-vm scripts/kvm-smoke-tmux scripts/kvm-console-wait scripts/check-dependencies scripts/update-dependencies scripts/test-scripts; do
   bash -n "$repo_root/$script"
 done
+grep -q 'sha256sum.*required to verify' "$repo_root/scripts/setup-host"
+grep -q 'gnupg2' "$repo_root/scripts/setup-host"
+grep -q 'verify-rocky-checksum' "$repo_root/scripts/setup-host"
+grep -q 'gpg --batch --homedir.*--verify' "$repo_root/scripts/verify-rocky-checksum"
+grep -q '/etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10' "$repo_root/scripts/verify-rocky-checksum"
+grep -q 'curl.*required to download' "$repo_root/scripts/setup-host"
+grep -q 'official CHECKSUM' "$repo_root/scripts/setup-host" || grep -q 'Official CHECKSUM' "$repo_root/scripts/setup-host"
+grep -q 'IDARSI_TEST_KVM_ISO_PATH' "$repo_root/scripts/setup-venv"
+grep -q 'idarsi-test network conflicts' "$repo_root/scripts/setup-host"
+  python3 - "$repo_root/scripts/validate-libvirt-network" "$repo_root/scripts/setup-host" "$repo_root/scripts/setup-venv" <<'PY'
+import importlib.util
+import importlib.machinery
+import sys
+import re
+
+spec = importlib.util.spec_from_loader("network", importlib.machinery.SourceFileLoader("network", sys.argv[1]))
+network = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(network)
+xml = """<network><name>idarsi-test</name><forward mode='nat'/><bridge name='virbr250'/><ip address='192.168.250.1' netmask='255.255.255.0'><dhcp><range start='192.168.250.2' end='192.168.250.199'/></dhcp></ip></network>"""
+assert network.valid_network(xml, [], "default via 10.0.0.1 dev eth0\n")
+assert not network.valid_network(xml.replace("mode='nat'", "mode='route'"), [], "")
+assert not network.valid_network(xml, ["<network><ip address='192.168.250.10' netmask='255.255.255.0'/></network>"], "")
+assert not network.valid_network(xml, [], "192.168.250.0/24 dev eth0\n")
+assert not network.valid_network(xml.replace("end='192.168.250.199'", "end='192.168.250.254'"), [], "")
+setup = open(sys.argv[2], encoding="utf-8").read()
+assert re.search(r"re\.escape\(sys\.argv\[2\]\)", setup)
+assert re.search(r"pattern\s*=\s*re\.compile\(rf['\"]\^SHA256", setup)
+assert re.search(r"iso_filename=.*basename.*iso_url", setup)
+custom_url = "https://example.invalid/path/custom-image.iso?download=1"
+assert custom_url.split("?", 1)[0].rsplit("/", 1)[-1] == "custom-image.iso"
+assert '"$iso_filename"' in setup
+filename = "Rocky-10-latest-x86_64-dvd.iso"
+checksum_pattern = re.compile(rf"^SHA256 \({re.escape(filename)}\) = ([0-9a-fA-F]{{64}})$")
+assert checksum_pattern.fullmatch(f"SHA256 ({filename}) = " + "a" * 64)
+assert not checksum_pattern.fullmatch(f"SHA256 ({filename}) = " + "a" * 63)
+assert not checksum_pattern.fullmatch(f"SHA256 (other-{filename}) = " + "a" * 64)
+create = setup.index('python3 "$repo_root/scripts/validate-libvirt-network" <"$network_xml"')
+define = setup.index('net-define "$network_xml"')
+assert create < define
+backup_tracking = setup.index('backed_up_paths+=("$target")')
+backup_move = setup.index('mv -- "$target" "$backup_dir/$(basename "$target")"')
+assert backup_tracking < backup_move
+for partial, target in (("$partial_checksums", "$iso_checksums"), ("$partial_signature", "$iso_signature"), ("$partial_iso", "$iso_path")):
+    tracking = setup.index(f'published_paths+=("{target}")')
+    publish_move = setup.index(f'mv -- "{partial}" "{target}"')
+    assert tracking < publish_move
+assert "Rocky-10-latest-x86_64-dvd.iso" in setup
+assert "curl" in setup[setup.index("kvm)"):setup.index("*) usage")]
+activate = open(sys.argv[3], encoding="utf-8").read()
+assert r'if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE:-} && -s "\$_idarsi_kvm_iso_path" ]]; then' in activate
+assert r'export IDARSI_TEST_KVM_INSTALL_SOURCE="\$_idarsi_kvm_iso_path"' in activate
+PY
 printf 'Shell syntax checks passed.\n'

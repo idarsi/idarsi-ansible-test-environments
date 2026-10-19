@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Validate the dedicated libvirt test network and prevent IPv4 overlap."""
+
+import ipaddress
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+
+def valid_network(xml_text: str, other_networks: list[str], routes: str) -> bool:
+    """Return whether the required network is exact and has no IPv4 conflicts."""
+    root = ET.fromstring(xml_text)
+    bridge = root.find("bridge")
+    forward = root.find("forward")
+    ip = root.find("ip")
+    dhcp_range = root.find("ip/dhcp/range")
+    if (root.findtext("name") != "idarsi-test" or forward is None or
+            forward.get("mode") != "nat" or bridge is None or
+            bridge.get("name") != "virbr250" or ip is None or
+            ip.get("address") != "192.168.250.1" or
+            ip.get("netmask") != "255.255.255.0" or dhcp_range is None or
+            dhcp_range.get("start") != "192.168.250.2" or
+            dhcp_range.get("end") != "192.168.250.199"):
+        return False
+    wanted = ipaddress.ip_network("192.168.250.0/24")
+    for xml in other_networks:
+        other = ET.fromstring(xml)
+        for node in other.findall("ip"):
+            if node.get("address") and node.get("netmask"):
+                network = ipaddress.ip_network(
+                    f"{node.get('address')}/{node.get('netmask')}", strict=False
+                )
+                if network.version == 4 and wanted.overlaps(network):
+                    return False
+    for line in routes.splitlines():
+        first = line.split(maxsplit=1)[0] if line.split() else ""
+        try:
+            route = ipaddress.ip_network(first, strict=False)
+        except ValueError:
+            continue
+        if route.version == 4 and wanted.overlaps(route):
+            return False
+    return True
+
+
+if __name__ == "__main__":
+    xml = sys.stdin.read()
+    names = subprocess.run(
+        ["virsh", "--connect", "qemu:///system", "net-list", "--all", "--name"],
+        check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    others = [subprocess.run(
+        ["virsh", "--connect", "qemu:///system", "net-dumpxml", name],
+        check=True, capture_output=True, text=True,
+    ).stdout for name in names if name.strip() and name.strip() != "idarsi-test"]
+    route_table = subprocess.run(
+        ["ip", "-4", "route", "show"], check=True, capture_output=True, text=True
+    ).stdout
+    raise SystemExit(0 if valid_network(xml, others, route_table) else 1)

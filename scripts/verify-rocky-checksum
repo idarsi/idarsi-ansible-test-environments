@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  printf 'Usage: %s CHECKSUM CHECKSUM.asc\n' "$0" >&2
+  exit 2
+fi
+
+key=/etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-10
+[[ -r "$key" ]] || { printf 'Trusted Rocky 10 signing key is unavailable: %s\n' "$key" >&2; exit 1; }
+command -v gpg >/dev/null || { printf 'gpg is required to verify Rocky checksum signatures\n' >&2; exit 1; }
+gpg_home=$(mktemp -d)
+trap 'rm -rf "$gpg_home"' EXIT
+chmod 0700 "$gpg_home"
+gpg --batch --quiet --homedir "$gpg_home" --import "$key"
+gpg --batch --homedir "$gpg_home" --verify "$2" "$1"
