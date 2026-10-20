@@ -12,7 +12,10 @@ the shared destroy playbook. No KVM driver plugin is required.
 source .venv/ansible-current/bin/activate
 ```
 
-This installs QEMU/KVM, libvirt, `virt-install`, SSH tools, `tmux`, and starts
+This installs QEMU/KVM, libvirt, `virt-install`, SSH tools, and `tmux`. KVM
+scenarios use the pre-existing active `idarsi-test-bases` libvirt storage pool;
+they do not create or modify host pools. Verify it with
+`virsh --connect qemu:///system pool-info idarsi-test-bases`. The setup starts
 the default and shared `idarsi-test` libvirt networks. The shared network uses
 `192.168.250.1/24`, NAT, and a DHCP pool of `.100` through `.199`; scenarios can
 assign stable addresses outside that pool. The host needs hardware
@@ -81,6 +84,7 @@ Each platform entry in `molecule.yml` defines:
 | `install_timeout` | Total seconds allowed for installation and SSH readiness | 3600 |
 | `ssh_user` | Temporary guest account | `molecule` |
 | `network` | Existing libvirt network | `default` |
+| `storage_pool` | Existing active libvirt storage pool | `idarsi-test-bases` |
 | `ipv4_address` | Static guest address; omit to use DHCP | unset |
 | `gateway` | Guest gateway when `ipv4_address` is set | `192.168.250.1` |
 | `netmask` | Guest IPv4 netmask when static | `255.255.255.0` |
@@ -97,7 +101,8 @@ waits until SSH is ready. The guest user has passwordless sudo. The example
 Kickstart keeps SELinux enforcing and the firewall enabled with SSH allowed,
 so roles can exercise host security settings in a real VM.
 
-The destroy playbook removes each named libvirt guest and its managed disk. VM
+The destroy playbook removes each named libvirt guest and only its
+scenario-named disk volume from the configured storage pool. VM
 names are scoped by a hash of the Molecule ephemeral directory so different
 role scenarios do not collide. If a run is interrupted, `molecule destroy -s
 kvm` invokes the same cleanup path.

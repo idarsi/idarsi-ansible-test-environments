@@ -31,6 +31,7 @@
             MOLECULE_SCENARIO_DIRECTORY: "{{ molecule_scenario_directory }}"
             KVM_LIBVIRT_URI: "{{ item.libvirt_uri | default(molecule_config.driver.libvirt_uri | default('qemu:///system')) }}"
             KVM_NETWORK: "{{ item.network | default('default') }}"
+            KVM_STORAGE_POOL: "{{ item.storage_pool | default('idarsi-test-bases') }}"
             KVM_SSH_USER: "{{ item.ssh_user | default('molecule') }}"
             KVM_IPV4_ADDRESS: "{{ item.ipv4_address | default('') }}"
             KVM_GATEWAY: "{{ item.gateway | default('192.168.250.1') }}"
@@ -69,6 +70,7 @@
           environment:
             MOLECULE_EPHEMERAL_DIRECTORY: "{{ molecule_ephemeral_directory }}"
             KVM_LIBVIRT_URI: "{{ item.libvirt_uri | default(molecule_config.driver.libvirt_uri | default('qemu:///system')) }}"
+            KVM_STORAGE_POOL: "{{ item.storage_pool | default('idarsi-test-bases') }}"
           loop: "{{ molecule_config.platforms }}"
           loop_control:
             label: "{{ item.name }}"

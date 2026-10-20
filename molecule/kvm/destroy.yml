@@ -17,6 +17,7 @@
       environment:
         MOLECULE_EPHEMERAL_DIRECTORY: "{{ molecule_ephemeral_directory }}"
         KVM_LIBVIRT_URI: "{{ item.libvirt_uri | default(molecule_config.driver.libvirt_uri | default('qemu:///system')) }}"
+        KVM_STORAGE_POOL: "{{ item.storage_pool | default('idarsi-test-bases') }}"
       loop: "{{ molecule_config.platforms }}"
       loop_control:
         label: "{{ item.name }}"

@@ -20,6 +20,7 @@ shift 2
 
 uri=${KVM_LIBVIRT_URI:-qemu:///system}
 network=${KVM_NETWORK:-default}
+storage_pool=${KVM_STORAGE_POOL:-idarsi-test-bases}
 ssh_user=${KVM_SSH_USER:-molecule}
 ipv4_address=${KVM_IPV4_ADDRESS:-}
 gateway=${KVM_GATEWAY:-192.168.250.1}
@@ -30,6 +31,17 @@ hash=$(printf '%s' "$MOLECULE_EPHEMERAL_DIRECTORY" | sha256sum | cut -c1-8)
 domain="molecule-${instance}-${hash}"
 domain=${domain:0:63}
 virsh_cmd=(virsh --connect "$uri")
+require_storage_pool() {
+  "${virsh_cmd[@]}" pool-info "$storage_pool" >/dev/null 2>&1 || {
+    printf 'libvirt storage pool %s is unavailable at %s\n' "$storage_pool" "$uri" >&2
+    exit 1
+  }
+  pool_state=$("${virsh_cmd[@]}" pool-info "$storage_pool" | awk -F: '/^State:/ {gsub(/[[:space:]]/, "", $2); print $2}')
+  [[ "$pool_state" == running ]] || {
+    printf 'libvirt storage pool %s is not active at %s\n' "$storage_pool" "$uri" >&2
+    exit 1
+  }
+}
 
 case "$action" in
   stop|start)
@@ -46,13 +58,14 @@ case "$action" in
     ;;
   destroy)
     [[ $# -eq 0 ]] || { usage; exit 2; }
+    require_storage_pool
     if "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1; then
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
-      "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage
+      "${virsh_cmd[@]}" undefine "$domain"
     fi
-    overlay=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}/${domain}.qcow2
-    if [[ -e "$overlay" ]]; then
-      rm -f -- "$overlay"
+    overlay_name=${domain}.qcow2
+    if "${virsh_cmd[@]}" vol-info "$overlay_name" --pool "$storage_pool" >/dev/null 2>&1; then
+      "${virsh_cmd[@]}" vol-delete "$overlay_name" --pool "$storage_pool"
     fi
     printf 'Destroyed %s (%s) if it existed.\n' "$instance" "$domain"
     ;;
@@ -87,6 +100,7 @@ case "$action" in
       kickstart_template=$(realpath "$kickstart_template")
     fi
     [[ -r "$kickstart_template" ]] || { printf 'Kickstart template not found: %s\n' "$kickstart_template" >&2; exit 1; }
+    require_storage_pool
     "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1 && {
       printf 'VM %s already exists. Run molecule destroy before creating it again.\n' "$domain" >&2
       exit 1
@@ -186,9 +200,9 @@ PY
     install_log="$log_root/${domain}.virt-install.log"
     deadline=$((SECONDS + timeout_seconds))
     virt_install_wait_minutes=$(((timeout_seconds + 59) / 60))
-    disk_argument="size=${disk_size},format=qcow2,bus=virtio"
+    disk_argument="pool=${storage_pool},size=${disk_size},format=qcow2,bus=virtio"
     if [[ "$base_mode" == auto ]]; then
-      disk_argument="path=${overlay},format=qcow2,bus=virtio"
+      disk_argument="vol=${domain}.qcow2,pool=${storage_pool},format=qcow2,bus=virtio"
     elif [[ -n ${KVM_DISK_PATH:-} ]]; then
       disk_argument="path=${KVM_DISK_PATH},size=${disk_size},format=qcow2,bus=virtio"
     fi
@@ -220,9 +234,9 @@ PY
       printf 'virt-install failed. Install log: %s\n' "$install_log" >&2
       cat "$install_log" >&2
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
-      "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage >/dev/null 2>&1 || true
-      if [[ "$base_mode" == auto ]]; then
-        rm -f -- "$overlay"
+      "${virsh_cmd[@]}" undefine "$domain" >/dev/null 2>&1 || true
+      if "${virsh_cmd[@]}" vol-info "${domain}.qcow2" --pool "$storage_pool" >/dev/null 2>&1; then
+        "${virsh_cmd[@]}" vol-delete "${domain}.qcow2" --pool "$storage_pool" >/dev/null 2>&1 || true
       fi
       exit 1
     fi
@@ -259,9 +273,9 @@ PY
       printf 'VM %s did not become SSH-ready within %s seconds. Install log: %s\n' "$domain" "$timeout_seconds" "$install_log" >&2
       cat "$install_log" >&2
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
-      "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage >/dev/null 2>&1 || true
-      if [[ "$base_mode" == auto ]]; then
-        rm -f -- "$overlay"
+      "${virsh_cmd[@]}" undefine "$domain" >/dev/null 2>&1 || true
+      if "${virsh_cmd[@]}" vol-info "${domain}.qcow2" --pool "$storage_pool" >/dev/null 2>&1; then
+        "${virsh_cmd[@]}" vol-delete "${domain}.qcow2" --pool "$storage_pool" >/dev/null 2>&1 || true
       fi
       exit 1
     fi
