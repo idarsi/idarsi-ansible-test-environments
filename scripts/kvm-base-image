@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
 cache_root=${XDG_CACHE_HOME:-$HOME/.cache}/idarsi-ansible-test-environments/kvm-base-locks
 revision=${KVM_BASE_IMAGE_REVISION:-1}
+image_owner=${SUDO_USER:-$(id -un)}
 
 usage() {
   printf 'Usage: %s find <os-key> <kickstart-template> <ssh-user> <disk-size-gb>\n' "$0" >&2
@@ -53,6 +54,33 @@ ensure_libvirt_readable() {
       printf 'KVM base image is not readable by libvirt: %s\nRun ./install.sh kvm to repair its ownership and permissions.\n' "$image" >&2
       return 1
     }
+  fi
+}
+
+prepare_image_for_sysprep() {
+  local image=$1
+  # Keep the unsealed guest image private while virt-sysprep processes it.
+  if [[ $EUID -eq 0 ]]; then
+    chmod 0600 -- "$image"
+    chown "$image_owner:libvirt" -- "$image"
+  else
+    sudo chmod 0600 -- "$image"
+    sudo chown "$image_owner:libvirt" -- "$image"
+  fi
+}
+
+prepare_image_for_libvirt() {
+  local image=$1
+  if [[ $EUID -eq 0 ]]; then
+    chmod 0644 -- "$image"
+    if command -v restorecon >/dev/null; then
+      restorecon -F -- "$image"
+    fi
+  else
+    sudo chmod 0644 -- "$image"
+    if command -v restorecon >/dev/null; then
+      sudo restorecon -F -- "$image"
+    fi
   fi
 }
 
@@ -128,6 +156,7 @@ case "$action" in
     work_dir=$(mktemp -d "${TMPDIR:-/tmp}/idarsi-kvm-base.XXXXXX")
     base_domain=
     base_disk=
+    base_image_published=false
     base_domain_defined=false
     cleanup() {
       if [[ "$base_domain_defined" == true ]]; then
@@ -136,6 +165,9 @@ case "$action" in
       fi
       if [[ -n "$base_disk" && -e "$base_disk" && ! -e "$base_image" ]]; then
         rm -f -- "$base_disk"
+      fi
+      if [[ "$base_image_published" != true && -e "$base_image" ]]; then
+        rm -f -- "$base_image"
       fi
       rm -rf -- "$work_dir"
     }
@@ -180,10 +212,14 @@ case "$action" in
     fi
     "${virsh_cmd[@]}" undefine "$base_domain"
     base_domain_defined=false
+    prepare_image_for_sysprep "$base_disk"
     virt-sysprep --operations defaults -a "$base_disk" >&2
+    chmod 0644 -- "$base_disk"
     mv -- "$base_disk" "$base_image"
+    prepare_image_for_libvirt "$base_image"
     ensure_libvirt_readable "$base_image"
     base_disk=
+    base_image_published=true
     printf 'Created sealed OS base image: %s\n' "$base_image" >&2
     printf '%s\n' "$base_image"
     ;;
