@@ -3,3 +3,5 @@
 .DS_Store
 .kvm-install-source
 .kvm-install-source-rocky10
+.kvm-install-source-rhel9
+.kvm-install-source-rhel10

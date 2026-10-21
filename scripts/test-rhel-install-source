@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf -- "$tmp"' EXIT
+
+fixture="$tmp/repo"
+mkdir -p "$fixture/scripts" "$tmp/bin" "$tmp/media"
+cp "$repo_root/scripts/prepare-kvm-install-source" "$fixture/scripts/"
+cp "$repo_root/scripts/setup-venv" "$fixture/scripts/"
+cat >"$tmp/bin/sudo" <<'MOCK_SUDO'
+#!/usr/bin/env bash
+[[ $1 == chmod ]] || exit 1
+shift
+exec chmod "$@"
+MOCK_SUDO
+chmod +x "$tmp/bin/sudo"
+
+# Keep Rocky sources offline and exercise versioned RHEL ISO discovery.
+touch "$tmp/media/rhel-9.8-x86_64-dvd.iso" \
+  "$tmp/media/rhel-9.10-x86_64-dvd.iso" \
+  "$tmp/media/rhel-10.2-x86_64-dvd.iso"
+chmod 0600 "$tmp/media/rhel-9.8-x86_64-dvd.iso" \
+  "$tmp/media/rhel-9.10-x86_64-dvd.iso" \
+  "$tmp/media/rhel-10.2-x86_64-dvd.iso"
+chmod 0700 "$tmp/media"
+env PATH="$tmp/bin:$PATH" \
+  IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
+  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/discovery.log"
+[[ $(cat "$fixture/.kvm-install-source-rhel9") == "$tmp/media/rhel-9.10-x86_64-dvd.iso" ]]
+[[ $(cat "$fixture/.kvm-install-source-rhel10") == "$tmp/media/rhel-10.2-x86_64-dvd.iso" ]]
+[[ $(stat -c '%a' "$tmp/media") == 711 ]]
+[[ $(stat -c '%a' "$tmp/media/rhel-9.10-x86_64-dvd.iso") == 644 ]]
+
+# An explicit RHEL 9 override wins over discovery and is retained for activation.
+touch "$tmp/override.iso"
+env PATH="$tmp/bin:$PATH" \
+  IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9="$tmp/override.iso" \
+  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/override.log"
+[[ $(cat "$fixture/.kvm-install-source-rhel9") == "$tmp/override.iso" ]]
+
+# An explicit RHEL 10 override also wins over discovery and is retained.
+touch "$tmp/override-rhel10.iso"
+env PATH="$tmp/bin:$PATH" \
+  IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10="$tmp/override-rhel10.iso" \
+  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/override-rhel10.log"
+[[ $(cat "$fixture/.kvm-install-source-rhel10") == "$tmp/override-rhel10.iso" ]]
+
+# Mock only environment creation and package commands; activation remains real.
+mkdir -p "$fixture/environments/ansible-current" "$tmp/bin"
+cat >"$fixture/versions.yml" <<'VERSIONS'
+python:
+  current: "3.12"
+VERSIONS
+cat >"$tmp/bin/python3.12" <<'MOCK_PYTHON'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $1 == -m && $2 == venv ]] || exit 1
+venv=${@: -1}
+mkdir -p "$venv/bin"
+cat >"$venv/bin/activate" <<'ACTIVATE'
+# Test activation in an isolated shell.
+ACTIVATE
+cat >"$venv/bin/python" <<'VENV_PYTHON'
+#!/usr/bin/env bash
+exit 0
+VENV_PYTHON
+cat >"$venv/bin/ansible-galaxy" <<'VENV_GALAXY'
+#!/usr/bin/env bash
+exit 0
+VENV_GALAXY
+chmod +x "$venv/bin/python" "$venv/bin/ansible-galaxy"
+MOCK_PYTHON
+cat >"$tmp/bin/ansible-galaxy" <<'MOCK_GALAXY'
+#!/usr/bin/env bash
+exit 0
+MOCK_GALAXY
+chmod +x "$tmp/bin/python3.12" "$tmp/bin/ansible-galaxy"
+env PATH="$tmp/bin:$PATH" "$fixture/scripts/setup-venv" ansible-current >/dev/null
+env -i PATH="$PATH" bash -c '
+  source "$1/.venv/ansible-current/bin/activate"
+  [[ $IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 == "$2" ]]
+  [[ $IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 == "$3" ]]
+' _ "$fixture" "$tmp/override.iso" "$tmp/override-rhel10.iso"
+
+printf 'RHEL install-source functional checks passed.\n'

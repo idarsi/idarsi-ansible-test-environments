@@ -55,5 +55,13 @@ if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10:-} && -r $(printf '%q' "$repo
   IFS= read -r IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 <$(printf '%q' "$repo_root/.kvm-install-source-rocky10")
   export IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10
 fi
+if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9:-} && -r $(printf '%q' "$repo_root/.kvm-install-source-rhel9") ]]; then
+  IFS= read -r IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 <$(printf '%q' "$repo_root/.kvm-install-source-rhel9")
+  export IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9
+fi
+if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10:-} && -r $(printf '%q' "$repo_root/.kvm-install-source-rhel10") ]]; then
+  IFS= read -r IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 <$(printf '%q' "$repo_root/.kvm-install-source-rhel10")
+  export IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10
+fi
 ACTIVATE_HOOK
 printf 'Created %s\nActivate with: source %s/bin/activate\n' "$venv" "$venv"
