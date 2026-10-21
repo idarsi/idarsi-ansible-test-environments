@@ -26,8 +26,8 @@ for environment in ansible-min ansible-current ansible-next; do
     "ansible-lint==$(awk -F'"' '/^ansible_lint:/{print $2}' "$versions")" \
     "molecule==$(awk -F'"' '/^molecule:/{print $2}' "$versions")" \
     "molecule-plugins[podman]==$(awk -F'"' '/^molecule_podman:/{print $2}' "$versions")"; do
-    grep -Fxq "$pin" "$requirements" || {
-      printf 'Missing pin %s in %s\n' "$pin" "$requirements" >&2
+    [[ $(grep -Fxc "$pin" "$requirements") -eq 1 ]] || {
+      printf 'Expected exactly one pin %s in %s\n' "$pin" "$requirements" >&2
       exit 1
     }
   done
@@ -38,6 +38,14 @@ for environment in ansible-min ansible-current ansible-next; do
       containers.podman) version_key=containers_podman ;;
     esac
     expected=$(awk -F'"' -v key="$version_key" '$0 ~ "^  " key ":" {print $2; exit}' "$versions")
+    [[ $(grep -Ec "^  $version_key:" "$versions") -eq 1 ]] || {
+      printf 'Expected exactly one declared pin for %s in %s\n' "$collection" "$versions" >&2
+      exit 1
+    }
+    [[ $(grep -Fc "  - name: \"$collection\"" "$collections") -eq 1 ]] || {
+      printf 'Expected exactly one declaration for %s in %s\n' "$collection" "$collections" >&2
+      exit 1
+    }
     awk -v name="$collection" -v expected="$expected" '
       $0 == "  - name: \"" name "\"" { getline; if ($0 == "    version: \"" expected "\"") found=1 }
       END { exit(found ? 0 : 1) }
@@ -52,5 +60,86 @@ for environment in ansible-min ansible-current ansible-next; do
     exit 1
   }
 done
+
+# When checking from an active environment, ensure the pinned collections are
+# actually installed there (repository-only checks remain usable without one).
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  if ! config=$(ansible-config dump --format json); then
+    printf 'Failed to read Ansible configuration with ansible-config.\n' >&2
+    exit 1
+  fi
+  paths_file=$(mktemp "${TMPDIR:-/tmp}/idarsi-collections-paths.XXXXXX")
+  trap 'rm -f "$paths_file"' EXIT
+  if ! python - "$config" >"$paths_file" <<'PYCONFIG'
+import json
+import sys
+
+try:
+    records = json.loads(sys.argv[1])
+except json.JSONDecodeError as error:
+    print(f"Invalid ansible-config JSON: {error}", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(records, list):
+    print("Expected ansible-config JSON list of records", file=sys.stderr)
+    raise SystemExit(1)
+settings = [r for r in records if isinstance(r, dict) and r.get("name") == "COLLECTIONS_PATHS"]
+if len(settings) > 1:
+    print("Duplicate COLLECTIONS_PATHS records in ansible-config output", file=sys.stderr)
+    raise SystemExit(1)
+value = settings[0].get("value", []) if settings else []
+if isinstance(value, str):
+    paths = value.split(":")
+elif isinstance(value, list) and all(isinstance(path, str) for path in value):
+    paths = value
+else:
+    print("COLLECTIONS_PATHS must be a string or list of strings", file=sys.stderr)
+    raise SystemExit(1)
+for path in paths:
+    if path:
+        sys.stdout.buffer.write(path.encode() + b"\0")
+PYCONFIG
+  then
+    exit 1
+  fi
+  mapfile -d '' -t collection_paths <"$paths_file"
+  if [[ ${#collection_paths[@]} -eq 0 ]]; then
+    collection_paths=("$VIRTUAL_ENV/collections")
+  fi
+  for collection in ansible.posix containers.podman; do
+    case "$collection" in
+      ansible.posix) namespace=ansible; name=posix; version_key=ansible_posix ;;
+      containers.podman) namespace=containers; name=podman; version_key=containers_podman ;;
+    esac
+    expected=$(awk -F'"' -v key="$version_key" '$0 ~ "^  " key ":" {print $2; exit}' "$versions")
+    manifests=()
+    for root in "${collection_paths[@]}"; do
+      manifest="$root/ansible_collections/$namespace/$name/MANIFEST.json"
+      [[ -f "$manifest" ]] && manifests+=("$manifest")
+    done
+    installed=$(python - "${manifests[@]}" <<'PY'
+import json
+import sys
+
+for path in sys.argv[1:]:
+    try:
+        with open(path, encoding="utf-8") as manifest:
+            print(json.load(manifest).get("collection_info", {}).get("version", ""))
+    except (OSError, json.JSONDecodeError):
+        print("")
+PY
+)
+    first=${installed%%$'\n'*}
+    [[ -n "$first" && "$first" == "$expected" ]] || {
+      first_root=${collection_paths[0]}
+      printf 'Required collection %s %s is missing or mismatched; first effective location: %s (manifest: %s; version: %s). Install or repair this collection at that manifest path.\n' \
+        "$collection" "$expected" "$first_root" "${manifests[0]:-$first_root/ansible_collections/$namespace/$name/MANIFEST.json}" "${first:-missing}" >&2
+      exit 1
+    }
+    [[ $((${#manifests[@]})) -eq 1 ]] || {
+      printf 'Collection %s has duplicate manifests (first effective copy is %s). Remove the later duplicate manifest(s): %s\n' "$collection" "${manifests[0]}" "${manifests[*]:1}" >&2
+      exit 1
+    }
+  done
+fi
 
 printf 'Ansible, Ansible Lint, Molecule, and collection pins are synchronized.\n'

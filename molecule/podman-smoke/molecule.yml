@@ -7,9 +7,10 @@ driver:
 
 platforms:
   - name: rocky10
-    image: quay.io/rockylinux/rockylinux:10
+    image: rocky10:latest
+    dockerfile: Dockerfile
     command: /bin/sleep infinity
-    pre_build_image: true
+    pre_build_image: false
 
 provisioner:
   name: ansible

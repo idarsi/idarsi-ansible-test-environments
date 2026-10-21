@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+default=/var/lib/libvirt/images/idarsi-test-bases
+
+# Validate every existing component, including ancestors, before privileged
+# mkdir/chown/chmod/restorecon operations. Keep this function sourceable for
+# isolated tests using a temporary root.
+validate_base_path() {
+  local requested=$1 expected=$2 current=/ component canonical
+  [[ "$requested" == "$expected" ]] || {
+    printf 'IDARSI_TEST_KVM_BASE_DIR must be the fixed canonical path %s.\n' "$expected" >&2
+    return 1
+  }
+  IFS=/ read -r -a components <<<"${requested#/}"
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || continue
+    current="${current%/}/$component"
+    if [[ -L "$current" ]]; then
+      printf 'KVM base path contains a symlink: %s\n' "$current" >&2
+      return 1
+    fi
+  done
+  canonical=$(realpath -m -- "$requested") || return 1
+  [[ "$canonical" == "$expected" ]] || {
+    printf 'KVM base path is not canonical: %s\n' "$requested" >&2
+    return 1
+  }
+}
+
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+  return 0
+fi
+requested=${IDARSI_TEST_KVM_BASE_DIR:-$default}
+validate_base_path "$requested" "$default"
+printf '%s\n' "$default"

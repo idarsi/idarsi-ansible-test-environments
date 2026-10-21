@@ -18,11 +18,23 @@ the default and shared `idarsi-test` libvirt networks. The shared network uses
 assign stable addresses outside that pool. The host needs hardware
 virtualization enabled and a readable/writable `/dev/kvm`. Setup adds the
 invoking user to the `libvirt` group; log out and back in for that membership
-to take effect. Check the host before running Molecule:
+to take effect. Setup creates and enables the `idarsi-test-bases` directory
+storage pool at `/var/lib/libvirt/images/idarsi-test-bases` for reusable base
+images. The shared `idarsi-test` network schema and the storage-pool type/target
+are validated before installation; conflicting definitions are refused, never
+replaced. The default network is only required to exist, be active, and have
+autostart enabled; its XML schema is managed by libvirt and is not constrained
+by this setup. Installation starts and enables valid existing resources as
+needed. `scripts/setup-host check kvm` is
+read-only and reports missing requirements. `IDARSI_TEST_KVM_BASE_DIR` is
+accepted only when exactly equal to the canonical default path; custom paths
+and symlink-based alternatives are unsupported to keep privileged directory
+operations confined. Check the host before running Molecule:
 
 ```bash
 scripts/setup-host check kvm
 virsh --connect qemu:///system net-info idarsi-test
+virsh --connect qemu:///system pool-info idarsi-test-bases
 ```
 
 The installer reuses configured sources and searches `/var/lib/libvirt/boot`
@@ -38,7 +50,9 @@ versioned filenames such as `rhel-9.8-x86_64-dvd.iso` and
 `rhel-10.2-x86_64-dvd.iso`. Their paths are exported as
 `IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9` and
 `IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10`. RHEL media is not downloaded; set
-these variables to override discovery or use media at another path. For
+these variables to override discovery or use media at another path. Explicit
+paths and URLs must end in the matching `rhel-<major>[.<minor>]-x86_64-dvd.iso`
+basename; invalid overrides fail setup rather than reusing cached state. For
 example, set `install_source: "${IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9}"` in a
 RHEL 9 platform entry. Use a
 Kickstart suited to the RHEL release. This tooling does not register guests or
@@ -124,9 +138,12 @@ access; this tooling does not store subscription credentials.
 
 ## Test this repository's KVM setup
 
-The `kvm-smoke` scenario exercises the shared VM lifecycle, SSH connection,
-Ansible converge and verify, SELinux enforcing mode, and guest cleanup. It
-is configured for a Rocky Linux 10 installation ISO available to libvirt:
+The `kvm-smoke` scenario is a Rocky Linux 10 smoke test. RHEL install sources
+are intended for role-specific scenarios; this launcher does not dynamically
+switch the smoke scenario to RHEL. The scenario exercises the shared VM
+lifecycle, SSH connection, Ansible converge and verify, SELinux enforcing mode,
+and guest cleanup. It is configured for a Rocky Linux 10 installation ISO
+available to libvirt:
 
 ```bash
 source .venv/ansible-current/bin/activate

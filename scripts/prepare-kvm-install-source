@@ -34,14 +34,22 @@ save_source() {
 }
 
 find_existing_image() {
-  local pattern=$1 found="" stat_cmd=(stat)
+  local pattern=$1 found="" validator=${2:-} major=${3:-} candidate stat_cmd=(stat)
+  local -a candidates=()
   [[ -d "$install_dir" ]] || return 0
   if [[ -r "$install_dir" && -x "$install_dir" ]]; then
-    found=$(find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V | tail -n 1)
+    mapfile -t candidates < <(find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V)
   else
-    found=$(sudo find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V | tail -n 1)
+    mapfile -t candidates < <(sudo find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V)
     stat_cmd=(sudo stat)
   fi
+  for candidate in "${candidates[@]}"; do
+    if [[ -n "$validator" ]] && ! "$validator" "$candidate" "$major"; then
+      printf 'Ignoring discovered RHEL %s candidate with an invalid DVD ISO filename: %s\n' "$major" "$candidate" >&2
+      continue
+    fi
+    found=$candidate
+  done
   if [[ -n "$found" ]]; then
     # libvirt commonly runs QEMU as an unprivileged account. Grant only the
     # missing path-traverse and file-read bits needed by that account.
@@ -123,9 +131,22 @@ done
 
 # RHEL media is supplied by the host owner rather than downloaded here: access
 # and licensing vary, and installation media does not provision subscriptions.
+valid_rhel_source_name() {
+  local source=$1 major=$2 name
+  name=${source%%\?*}
+  name=${name##*/}
+  [[ "${name,,}" =~ ^rhel-${major}(\.[0-9]+)?-x86_64-dvd\.iso$ ]]
+}
+
 for i in 0 1; do
   configured=${!rhel_env_names[$i]:-}
+  major=9
+  [[ $i -eq 1 ]] && major=10
   if [[ -n "$configured" ]]; then
+    if ! valid_rhel_source_name "$configured" "$major"; then
+      printf 'Configured %s source must be an RHEL %s x86_64 DVD ISO (for example rhel-%s.8-x86_64-dvd.iso): %s\n' "${rhel_labels[$i]}" "$major" "$major" "$configured" >&2
+      exit 1
+    fi
     if [[ "$configured" == http://* || "$configured" == https://* ]]; then
       if curl --fail --location --silent --show-error --head "$configured" >/dev/null 2>&1; then
         printf '%s install source: %s\n' "${rhel_labels[$i]}" "$configured"
@@ -139,23 +160,22 @@ for i in 0 1; do
       continue
     fi
     printf 'Configured %s source is not readable or available: %s\n' "${rhel_labels[$i]}" "$configured" >&2
+    exit 1
   fi
 
   state_file="$repo_root/${rhel_state_names[$i]}"
   if [[ -z "$configured" && -r "$state_file" ]]; then
     IFS= read -r previous <"$state_file" || true
-    if [[ "$previous" == http://* || "$previous" == https://* ]] && curl --fail --location --silent --show-error --head "$previous" >/dev/null 2>&1; then
+    if valid_rhel_source_name "$previous" "$major" && [[ "$previous" == http://* || "$previous" == https://* ]] && curl --fail --location --silent --show-error --head "$previous" >/dev/null 2>&1; then
       printf '%s install source: %s\n' "${rhel_labels[$i]}" "$previous"
       continue
-    elif [[ -r "$previous" ]]; then
+    elif valid_rhel_source_name "$previous" "$major" && [[ -r "$previous" ]]; then
       printf '%s install source: %s\n' "${rhel_labels[$i]}" "$previous"
       continue
     fi
   fi
 
-  major=9
-  [[ $i -eq 1 ]] && major=10
-  existing=$(find_existing_image "rhel-${major}*-x86_64-dvd.iso")
+  existing=$(find_existing_image "rhel-${major}*-x86_64-dvd.iso" valid_rhel_source_name "$major")
   if [[ -n "$existing" ]]; then
     printf '%s install source: %s\n' "${rhel_labels[$i]}" "$existing"
     printf '%s\n' "$existing" >"$repo_root/${rhel_state_names[$i]}"

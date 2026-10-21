@@ -20,40 +20,97 @@ chmod +x "$tmp/bin/sudo"
 # Keep Rocky sources offline and exercise versioned RHEL ISO discovery.
 touch "$tmp/media/rhel-9.8-x86_64-dvd.iso" \
   "$tmp/media/rhel-9.10-x86_64-dvd.iso" \
+  "$tmp/media/rhel-9foo-x86_64-dvd.iso" \
   "$tmp/media/rhel-10.2-x86_64-dvd.iso"
 chmod 0600 "$tmp/media/rhel-9.8-x86_64-dvd.iso" \
   "$tmp/media/rhel-9.10-x86_64-dvd.iso" \
   "$tmp/media/rhel-10.2-x86_64-dvd.iso"
 chmod 0700 "$tmp/media"
-env PATH="$tmp/bin:$PATH" \
+env -u IDARSI_TEST_KVM_INSTALL_DIR \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 \
+  -u IDARSI_TEST_KVM_BASE_DIR \
+  PATH="$tmp/bin:$PATH" \
   IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
   IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
   IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
-  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/discovery.log"
+  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/discovery.log" 2>&1
 [[ $(cat "$fixture/.kvm-install-source-rhel9") == "$tmp/media/rhel-9.10-x86_64-dvd.iso" ]]
 [[ $(cat "$fixture/.kvm-install-source-rhel10") == "$tmp/media/rhel-10.2-x86_64-dvd.iso" ]]
+grep -q 'Ignoring discovered RHEL 9 candidate with an invalid DVD ISO filename: .*rhel-9foo-x86_64-dvd.iso' "$tmp/discovery.log"
 [[ $(stat -c '%a' "$tmp/media") == 711 ]]
 [[ $(stat -c '%a' "$tmp/media/rhel-9.10-x86_64-dvd.iso") == 644 ]]
 
 # An explicit RHEL 9 override wins over discovery and is retained for activation.
-touch "$tmp/override.iso"
-env PATH="$tmp/bin:$PATH" \
+touch "$tmp/rhel-9.9-x86_64-dvd.iso"
+env -u IDARSI_TEST_KVM_INSTALL_DIR \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 \
+  -u IDARSI_TEST_KVM_BASE_DIR \
+  PATH="$tmp/bin:$PATH" \
   IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
   IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
   IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
-  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9="$tmp/override.iso" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9="$tmp/rhel-9.9-x86_64-dvd.iso" \
   "$fixture/scripts/prepare-kvm-install-source" >"$tmp/override.log"
-[[ $(cat "$fixture/.kvm-install-source-rhel9") == "$tmp/override.iso" ]]
+[[ $(cat "$fixture/.kvm-install-source-rhel9") == "$tmp/rhel-9.9-x86_64-dvd.iso" ]]
 
 # An explicit RHEL 10 override also wins over discovery and is retained.
-touch "$tmp/override-rhel10.iso"
-env PATH="$tmp/bin:$PATH" \
+touch "$tmp/rhel-10.3-x86_64-dvd.iso"
+env -u IDARSI_TEST_KVM_INSTALL_DIR \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 \
+  -u IDARSI_TEST_KVM_BASE_DIR \
+  PATH="$tmp/bin:$PATH" \
   IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
   IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
   IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
-  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10="$tmp/override-rhel10.iso" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10="$tmp/rhel-10.3-x86_64-dvd.iso" \
   "$fixture/scripts/prepare-kvm-install-source" >"$tmp/override-rhel10.log"
-[[ $(cat "$fixture/.kvm-install-source-rhel10") == "$tmp/override-rhel10.iso" ]]
+[[ $(cat "$fixture/.kvm-install-source-rhel10") == "$tmp/rhel-10.3-x86_64-dvd.iso" ]]
+
+# Invalid explicit overrides fail immediately and never fall back to cached sources.
+printf '%s\n' "$tmp/media/rhel-9.10-x86_64-dvd.iso" >"$fixture/.kvm-install-source-rhel9"
+if env -u IDARSI_TEST_KVM_INSTALL_DIR \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 \
+  -u IDARSI_TEST_KVM_BASE_DIR \
+  PATH="$tmp/bin:$PATH" \
+  IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9="$tmp/wrong-major-x86_64-dvd.iso" \
+  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/invalid.log" 2>&1; then
+  printf 'Invalid RHEL override unexpectedly succeeded.\n' >&2
+  exit 1
+fi
+grep -q 'must be an RHEL 9 x86_64 DVD ISO' "$tmp/invalid.log"
+[[ $(cat "$fixture/.kvm-install-source-rhel9") == "$tmp/media/rhel-9.10-x86_64-dvd.iso" ]]
+
+# A stale cached path with a non-matching basename is ignored and not reused.
+printf '%s\n' "$tmp/stale.iso" >"$fixture/.kvm-install-source-rhel9"
+if env -u IDARSI_TEST_KVM_INSTALL_DIR \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 \
+  -u IDARSI_TEST_KVM_BASE_DIR \
+  PATH="$tmp/bin:$PATH" \
+  IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
+  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/stale.log" 2>&1; then
+  :
+fi
+[[ $(cat "$fixture/.kvm-install-source-rhel9") == "$tmp/media/rhel-9.10-x86_64-dvd.iso" ]]
 
 # Mock only environment creation and package commands; activation remains real.
 mkdir -p "$fixture/environments/ansible-current" "$tmp/bin"
@@ -85,11 +142,20 @@ cat >"$tmp/bin/ansible-galaxy" <<'MOCK_GALAXY'
 exit 0
 MOCK_GALAXY
 chmod +x "$tmp/bin/python3.12" "$tmp/bin/ansible-galaxy"
-env PATH="$tmp/bin:$PATH" "$fixture/scripts/setup-venv" ansible-current >/dev/null
-env -i PATH="$PATH" bash -c '
+env -u IDARSI_TEST_KVM_INSTALL_DIR \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 \
+  -u IDARSI_TEST_KVM_BASE_DIR \
+  PATH="$tmp/bin:$PATH" "$fixture/scripts/setup-venv" ansible-current >/dev/null
+env -i PATH="$PATH" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9="$tmp/rhel-9.9-x86_64-dvd.iso" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10="$tmp/rhel-10.3-x86_64-dvd.iso" \
+  bash -c '
   source "$1/.venv/ansible-current/bin/activate"
   [[ $IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 == "$2" ]]
   [[ $IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 == "$3" ]]
-' _ "$fixture" "$tmp/override.iso" "$tmp/override-rhel10.iso"
+' _ "$fixture" "$tmp/rhel-9.9-x86_64-dvd.iso" "$tmp/rhel-10.3-x86_64-dvd.iso"
 
 printf 'RHEL install-source functional checks passed.\n'

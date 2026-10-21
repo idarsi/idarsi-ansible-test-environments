@@ -50,7 +50,8 @@ case "$action" in
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
       "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage
     fi
-    overlay=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}/${domain}.qcow2
+    base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
+    overlay=$base_dir/${domain}.qcow2
     if [[ -e "$overlay" ]]; then
       rm -f -- "$overlay"
     fi
@@ -105,7 +106,7 @@ case "$action" in
     chmod 600 "$key_file"
     public_key=$(<"$key_file.pub")
     base_image=
-    base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
+    base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
     overlay="$base_dir/${domain}.qcow2"
     if [[ "$base_mode" == auto ]]; then
       command -v qemu-img >/dev/null || { printf 'qemu-img is required; run install.sh kvm.\n' >&2; exit 1; }
