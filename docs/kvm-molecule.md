@@ -50,7 +50,9 @@ versioned filenames such as `rhel-9.8-x86_64-dvd.iso` and
 `rhel-10.2-x86_64-dvd.iso`. Their paths are exported as
 `IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9` and
 `IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10`. RHEL media is not downloaded; set
-these variables to override discovery or use media at another path. For
+these variables to override discovery or use media at another path. Explicit
+paths and URLs must end in the matching `rhel-<major>[.<minor>]-x86_64-dvd.iso`
+basename; invalid overrides fail setup rather than reusing cached state. For
 example, set `install_source: "${IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9}"` in a
 RHEL 9 platform entry. Use a
 Kickstart suited to the RHEL release. This tooling does not register guests or
@@ -136,9 +138,12 @@ access; this tooling does not store subscription credentials.
 
 ## Test this repository's KVM setup
 
-The `kvm-smoke` scenario exercises the shared VM lifecycle, SSH connection,
-Ansible converge and verify, SELinux enforcing mode, and guest cleanup. It
-is configured for a Rocky Linux 10 installation ISO available to libvirt:
+The `kvm-smoke` scenario is a Rocky Linux 10 smoke test. RHEL install sources
+are intended for role-specific scenarios; this launcher does not dynamically
+switch the smoke scenario to RHEL. The scenario exercises the shared VM
+lifecycle, SSH connection, Ansible converge and verify, SELinux enforcing mode,
+and guest cleanup. It is configured for a Rocky Linux 10 installation ISO
+available to libvirt:
 
 ```bash
 source .venv/ansible-current/bin/activate

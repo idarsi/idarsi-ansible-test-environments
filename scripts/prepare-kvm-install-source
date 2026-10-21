@@ -123,9 +123,22 @@ done
 
 # RHEL media is supplied by the host owner rather than downloaded here: access
 # and licensing vary, and installation media does not provision subscriptions.
+valid_rhel_source_name() {
+  local source=$1 major=$2 name
+  name=${source%%\?*}
+  name=${name##*/}
+  [[ "${name,,}" =~ ^rhel-${major}(\.[0-9]+)?-x86_64-dvd\.iso$ ]]
+}
+
 for i in 0 1; do
   configured=${!rhel_env_names[$i]:-}
+  major=9
+  [[ $i -eq 1 ]] && major=10
   if [[ -n "$configured" ]]; then
+    if ! valid_rhel_source_name "$configured" "$major"; then
+      printf 'Configured %s source must be an RHEL %s x86_64 DVD ISO (for example rhel-%s.8-x86_64-dvd.iso): %s\n' "${rhel_labels[$i]}" "$major" "$major" "$configured" >&2
+      exit 1
+    fi
     if [[ "$configured" == http://* || "$configured" == https://* ]]; then
       if curl --fail --location --silent --show-error --head "$configured" >/dev/null 2>&1; then
         printf '%s install source: %s\n' "${rhel_labels[$i]}" "$configured"
@@ -139,22 +152,21 @@ for i in 0 1; do
       continue
     fi
     printf 'Configured %s source is not readable or available: %s\n' "${rhel_labels[$i]}" "$configured" >&2
+    exit 1
   fi
 
   state_file="$repo_root/${rhel_state_names[$i]}"
   if [[ -z "$configured" && -r "$state_file" ]]; then
     IFS= read -r previous <"$state_file" || true
-    if [[ "$previous" == http://* || "$previous" == https://* ]] && curl --fail --location --silent --show-error --head "$previous" >/dev/null 2>&1; then
+    if valid_rhel_source_name "$previous" "$major" && [[ "$previous" == http://* || "$previous" == https://* ]] && curl --fail --location --silent --show-error --head "$previous" >/dev/null 2>&1; then
       printf '%s install source: %s\n' "${rhel_labels[$i]}" "$previous"
       continue
-    elif [[ -r "$previous" ]]; then
+    elif valid_rhel_source_name "$previous" "$major" && [[ -r "$previous" ]]; then
       printf '%s install source: %s\n' "${rhel_labels[$i]}" "$previous"
       continue
     fi
   fi
 
-  major=9
-  [[ $i -eq 1 ]] && major=10
   existing=$(find_existing_image "rhel-${major}*-x86_64-dvd.iso")
   if [[ -n "$existing" ]]; then
     printf '%s install source: %s\n' "${rhel_labels[$i]}" "$existing"
