@@ -53,6 +53,16 @@ there, the ISO prompt and installation are skipped. The installer prepares
 that directory for the invoking user, so Molecule can create and remove guest
 overlays without an interactive `sudo` prompt.
 
+RHEL 9 and 10 DVD ISOs already present in `/var/lib/libvirt/boot` are also
+detected (for example, `rhel-9.8-x86_64-dvd.iso` and
+`rhel-10.2-x86_64-dvd.iso`). Their paths are exported as
+`IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9` and
+`IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10`; these images are not downloaded by the
+installer. Set either variable explicitly to use media elsewhere. RHEL
+subscription registration and repository access are not configured by this
+tooling, so use a role-appropriate Kickstart and provide any required guest
+subscription or repository access yourself.
+
 Molecule creates a small copy-on-write qcow2 overlay per VM from that base,
 then sets the VM hostname, SSH key, and optional static address in the overlay.
 Tests therefore start from the same clean OS state without reinstalling the

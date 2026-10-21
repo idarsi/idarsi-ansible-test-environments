@@ -22,5 +22,8 @@ The shared environments also provide Ansible Lint for role checks. Run
 configuration and any justified exceptions remain role-owned.
 
 Before submitting repository changes, run `make validate` and `yamllint .`.
-This repository validates its setup scripts and dependency pins; role behavior
-is verified by each role's own Molecule scenarios.
+The setup-script checks include an isolated RHEL install-source functional test
+for versioned ISO discovery, explicit overrides, and `setup-venv` activation;
+it uses temporary files and mocked environment-creation commands, without
+network access or libvirt. Role behavior is verified by each role's own
+Molecule scenarios.

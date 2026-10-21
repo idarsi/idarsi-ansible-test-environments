@@ -5,8 +5,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 kickstart="$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl"
 base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
 base_owner=${SUDO_USER:-$(id -un)}
-declare -a states=(.kvm-install-source .kvm-install-source-rocky10)
-declare -a keys=(rocky9 rocky10)
+declare -a states=(.kvm-install-source .kvm-install-source-rocky10 .kvm-install-source-rhel9 .kvm-install-source-rhel10)
+declare -a keys=(rocky9 rocky10 rhel9 rhel10)
 
 if [[ $EUID -eq 0 ]]; then
   mkdir -p "$base_dir"
@@ -24,7 +24,7 @@ else
 fi
 
 ready=0
-for i in 0 1; do
+for i in 0 1 2 3; do
   state_file="$repo_root/${states[$i]}"
   [[ -r "$state_file" ]] || continue
   IFS= read -r source <"$state_file" || true

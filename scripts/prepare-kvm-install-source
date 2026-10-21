@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-install_dir=/var/lib/libvirt/boot
+install_dir=${IDARSI_TEST_KVM_INSTALL_DIR:-/var/lib/libvirt/boot}
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/idarsi-kvm-isos.XXXXXX")
 sudo_keepalive_pid=
 cleanup() {
@@ -21,6 +21,9 @@ declare -a env_names=(IDARSI_TEST_KVM_INSTALL_SOURCE IDARSI_TEST_KVM_INSTALL_SOU
 declare -a state_names=(.kvm-install-source .kvm-install-source-rocky10)
 declare -a fallbacks=(2755067904 2072444928)
 declare -a sources=("" "")
+declare -a rhel_labels=("Red Hat Enterprise Linux 9" "Red Hat Enterprise Linux 10")
+declare -a rhel_env_names=(IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10)
+declare -a rhel_state_names=(.kvm-install-source-rhel9 .kvm-install-source-rhel10)
 declare -a downloads=() decisions=()
 
 save_source() {
@@ -31,16 +34,25 @@ save_source() {
 }
 
 find_existing_image() {
-  local pattern=$1 found=""
+  local pattern=$1 found="" stat_cmd=(stat)
   [[ -d "$install_dir" ]] || return 0
   if [[ -r "$install_dir" && -x "$install_dir" ]]; then
     found=$(find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V | tail -n 1)
   else
     found=$(sudo find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V | tail -n 1)
+    stat_cmd=(sudo stat)
   fi
   if [[ -n "$found" ]]; then
-    if [[ ! -r "$install_dir" || ! -x "$install_dir" ]]; then sudo chmod 0755 "$install_dir"; fi
-    if [[ ! -r "$found" ]]; then sudo chmod 0644 "$found"; fi
+    # libvirt commonly runs QEMU as an unprivileged account. Grant only the
+    # missing path-traverse and file-read bits needed by that account.
+    dir_mode=$("${stat_cmd[@]}" -c '%a' "$install_dir")
+    file_mode=$("${stat_cmd[@]}" -c '%a' "$found")
+    if (( (8#$dir_mode & 8#11) != 8#11 )); then
+      sudo chmod go+x "$install_dir" || { printf 'Cannot make %s traversable by libvirt/QEMU.\n' "$install_dir" >&2; return 1; }
+    fi
+    if (( (8#$file_mode & 8#44) != 8#44 )); then
+      sudo chmod go+r "$found" || { printf 'Cannot make %s readable by libvirt/QEMU.\n' "$found" >&2; return 1; }
+    fi
     printf '%s' "$found"
   fi
 }
@@ -107,6 +119,50 @@ for i in 0 1; do
     continue
   fi
   downloads+=("$i")
+done
+
+# RHEL media is supplied by the host owner rather than downloaded here: access
+# and licensing vary, and installation media does not provision subscriptions.
+for i in 0 1; do
+  configured=${!rhel_env_names[$i]:-}
+  if [[ -n "$configured" ]]; then
+    if [[ "$configured" == http://* || "$configured" == https://* ]]; then
+      if curl --fail --location --silent --show-error --head "$configured" >/dev/null 2>&1; then
+        printf '%s install source: %s\n' "${rhel_labels[$i]}" "$configured"
+        printf '%s\n' "$configured" >"$repo_root/${rhel_state_names[$i]}"
+        continue
+      fi
+    elif [[ -r "$configured" ]]; then
+      configured=$(realpath "$configured")
+      printf '%s install source: %s\n' "${rhel_labels[$i]}" "$configured"
+      printf '%s\n' "$configured" >"$repo_root/${rhel_state_names[$i]}"
+      continue
+    fi
+    printf 'Configured %s source is not readable or available: %s\n' "${rhel_labels[$i]}" "$configured" >&2
+  fi
+
+  state_file="$repo_root/${rhel_state_names[$i]}"
+  if [[ -z "$configured" && -r "$state_file" ]]; then
+    IFS= read -r previous <"$state_file" || true
+    if [[ "$previous" == http://* || "$previous" == https://* ]] && curl --fail --location --silent --show-error --head "$previous" >/dev/null 2>&1; then
+      printf '%s install source: %s\n' "${rhel_labels[$i]}" "$previous"
+      continue
+    elif [[ -r "$previous" ]]; then
+      printf '%s install source: %s\n' "${rhel_labels[$i]}" "$previous"
+      continue
+    fi
+  fi
+
+  major=9
+  [[ $i -eq 1 ]] && major=10
+  existing=$(find_existing_image "rhel-${major}*-x86_64-dvd.iso")
+  if [[ -n "$existing" ]]; then
+    printf '%s install source: %s\n' "${rhel_labels[$i]}" "$existing"
+    printf '%s\n' "$existing" >"$repo_root/${rhel_state_names[$i]}"
+  else
+    rm -f -- "$repo_root/${rhel_state_names[$i]}"
+    printf 'No %s DVD ISO found in %s; provide %s to use one.\n' "${rhel_labels[$i]}" "$install_dir" "${rhel_env_names[$i]}"
+  fi
 done
 
 if ((${#downloads[@]} == 0)); then

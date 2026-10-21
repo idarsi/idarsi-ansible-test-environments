@@ -45,6 +45,21 @@ official SHA256 checksum. Rocky 9 is exported as
 `IDARSI_TEST_KVM_INSTALL_SOURCE`; Rocky 10 uses
 `IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10`.
 
+It also detects existing RHEL 9 and 10 DVD ISOs in that directory, including
+versioned filenames such as `rhel-9.8-x86_64-dvd.iso` and
+`rhel-10.2-x86_64-dvd.iso`. Their paths are exported as
+`IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9` and
+`IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10`. RHEL media is not downloaded; set
+these variables to override discovery or use media at another path. For
+example, set `install_source: "${IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9}"` in a
+RHEL 9 platform entry. Use a
+Kickstart suited to the RHEL release. This tooling does not register guests or
+provide subscription credentials/repository access; configure those as needed
+for the role under test. When an ISO is discovered in the libvirt boot
+directory, setup adds only missing group/other traverse bits to that directory
+and group/other read bits to the ISO so an unprivileged QEMU process can open
+it regardless of its group membership.
+
 After ISO selection, `install.sh` creates a reusable OS-only base image in
 `/var/lib/libvirt/images/idarsi-test-bases`. It skips the ISO prompts when a
 compatible base already exists. Molecule creates a per-VM copy-on-write

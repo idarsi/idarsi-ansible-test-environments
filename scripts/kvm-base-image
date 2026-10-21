@@ -12,9 +12,11 @@ usage() {
 }
 
 source_os_key() {
-  local source=$1 rocky_re='[Rr]ocky[-_/ ]?([0-9]+)' fedora_re='[Ff]edora[-_/ ]?([0-9]+)'
+  local source=$1 rhel_re='[Rr][Hh][Ee][Ll][-_ /]?([0-9]+)' rocky_re='[Rr]ocky[-_/ ]?([0-9]+)' fedora_re='[Ff]edora[-_/ ]?([0-9]+)'
   if [[ "$source" == base-only:* ]]; then
     printf '%s' "${source#base-only:}"
+  elif [[ "$source" =~ $rhel_re ]]; then
+    printf 'rhel%s' "${BASH_REMATCH[1]}"
   elif [[ "$source" =~ $rocky_re ]]; then
     printf 'rocky%s' "${BASH_REMATCH[1]}"
   elif [[ "$source" =~ $fedora_re ]]; then
