@@ -93,7 +93,7 @@ export PATH="$mock_bin:$PATH"
 run_host_check() {
   local scenario=$1 expected_status=$2
   : >"$VIRSH_LOG"
-  if KVM_CASE="$scenario" "$setup" check kvm >"$tmp/check.out" 2>&1; then
+  if KVM_CASE="$scenario" IDARSI_TEST_KVM_DEVICE="${kvm_device:-/dev/kvm}" "$setup" check kvm >"$tmp/check.out" 2>&1; then
     status=0
   else
     status=$?
@@ -110,7 +110,12 @@ run_host_check() {
   fi
 }
 
+kvm_device=/dev/null
 run_host_check ready 0
+kvm_device="$tmp/not-a-char-device"
+touch "$kvm_device"
+run_host_check ready 1
+kvm_device=/dev/null
 run_host_check missing-network 1
 run_host_check missing-pool 1
 for conflict in conflicting-network-nat conflicting-network-dhcp; do

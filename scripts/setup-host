@@ -118,7 +118,11 @@ PY
     needs_base_pool=true
   fi
   [[ -d "$base_dir" ]] || needs_base_pool=true
-  [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || needs_kvm_device=true
+  kvm_device=/dev/kvm
+  if [[ "$action" == check && ${IDARSI_TEST_KVM_DEVICE+x} ]]; then
+    kvm_device=$IDARSI_TEST_KVM_DEVICE
+  fi
+  [[ -c "$kvm_device" && -r "$kvm_device" && -w "$kvm_device" ]] || needs_kvm_device=true
 fi
 
 if [[ ${#missing[@]} -eq 0 && $needs_libvirt == false && $needs_libvirt_group == false && $needs_network == false && $needs_test_network == false && $needs_base_pool == false && $needs_kvm_device == false ]]; then
