@@ -20,9 +20,12 @@ virtualization enabled and a readable/writable `/dev/kvm`. Setup adds the
 invoking user to the `libvirt` group; log out and back in for that membership
 to take effect. Setup creates and enables the `idarsi-test-bases` directory
 storage pool at `/var/lib/libvirt/images/idarsi-test-bases` for reusable base
-images. The networks and pool type/target are validated before installation;
-conflicting definitions are refused, never replaced. Installation starts and
-enables valid existing resources as needed. `scripts/setup-host check kvm` is
+images. The shared `idarsi-test` network schema and the storage-pool type/target
+are validated before installation; conflicting definitions are refused, never
+replaced. The default network is only required to exist, be active, and have
+autostart enabled; its XML schema is managed by libvirt and is not constrained
+by this setup. Installation starts and enables valid existing resources as
+needed. `scripts/setup-host check kvm` is
 read-only and reports missing requirements. `IDARSI_TEST_KVM_BASE_DIR` is
 accepted only when exactly equal to the canonical default path; custom paths
 and symlink-based alternatives are unsupported to keep privileged directory

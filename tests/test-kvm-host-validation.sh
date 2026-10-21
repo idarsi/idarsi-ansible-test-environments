@@ -6,10 +6,23 @@ setup="$root/scripts/setup-host"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# Production accepts exactly the fixed canonical path; temporary canonical and
-# symlink paths are both rejected before any host operation.
+# Production accepts exactly the fixed canonical path. Exercise filesystem
+# checks through the same validator with a temporary expected root.
 base_dir="$root/scripts/kvm-base-dir"
 [[ $(env -u IDARSI_TEST_KVM_BASE_DIR "$base_dir") == /var/lib/libvirt/images/idarsi-test-bases ]]
+source "$base_dir"
+mkdir -p "$tmp/root/parent/base" "$tmp/real"
+ln -s "$tmp/real" "$tmp/root/parent/base/in-root-link"
+validate_base_path "$tmp/root/parent/base" "$tmp/root/parent/base"
+if validate_base_path "$tmp/root/parent/base/in-root-link" "$tmp/root/parent/base/in-root-link" 2>/dev/null; then
+  printf 'In-root symlink was accepted\n' >&2
+  exit 1
+fi
+ln -s "$tmp/real" "$tmp/root/parent-link"
+if validate_base_path "$tmp/root/parent-link/base" "$tmp/root/parent-link/base" 2>/dev/null; then
+  printf 'Symlinked ancestor was accepted\n' >&2
+  exit 1
+fi
 for path in "$tmp/canonical" "$tmp/link" / /var/lib/libvirt/images /tmp \
   /var/lib/libvirt/images/idarsi-test-bases/../other \
   /var/lib/libvirt/images/idarsi-test-bases/child\ name; do
