@@ -6,5 +6,6 @@ for script in install.sh uninstall.sh verify-install-kvm.sh scripts/setup-host s
   bash -n "$repo_root/$script"
 done
 bash "$repo_root/tests/test-kvm-host-validation.sh"
+bash "$repo_root/tests/test-check-dependencies.sh"
 "$repo_root/scripts/test-rhel-install-source"
 printf 'Shell syntax checks passed.\n'

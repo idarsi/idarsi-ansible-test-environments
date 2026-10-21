@@ -53,4 +53,34 @@ for environment in ansible-min ansible-current ansible-next; do
   }
 done
 
+# When checking from an active environment, ensure the pinned collections are
+# actually installed there (repository-only checks remain usable without one).
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  collection_path="$VIRTUAL_ENV/collections/ansible_collections"
+  for collection in ansible.posix containers.podman; do
+    case "$collection" in
+      ansible.posix) namespace=ansible; name=posix; version_key=ansible_posix ;;
+      containers.podman) namespace=containers; name=podman; version_key=containers_podman ;;
+    esac
+    expected=$(awk -F'"' -v key="$version_key" '$0 ~ "^  " key ":" {print $2; exit}' "$versions")
+    manifest="$collection_path/$namespace/$name/MANIFEST.json"
+    installed=$(python - "$manifest" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as manifest:
+        print(json.load(manifest).get("collection_info", {}).get("version", ""))
+except (OSError, json.JSONDecodeError):
+    print("")
+PY
+)
+    [[ "$installed" == "$expected" ]] || {
+      printf 'Required collection %s %s is missing or mismatched in %s (found: %s). Rerun: install.sh <profile> %s\n' \
+        "$collection" "$expected" "$VIRTUAL_ENV" "${installed:-missing}" "${VIRTUAL_ENV##*/}" >&2
+      exit 1
+    }
+  done
+fi
+
 printf 'Ansible, Ansible Lint, Molecule, and collection pins are synchronized.\n'
