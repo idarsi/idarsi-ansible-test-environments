@@ -68,13 +68,20 @@ base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
 base_root=/var/lib/libvirt/images/idarsi-test-bases
 needs_kvm_device=false
 if [[ "$profile" == kvm || "$profile" == all ]]; then
-  # Do not allow privileged filesystem operations to follow caller-controlled paths.
-  if [[ "$base_dir" != "$base_root" && "$base_dir" != "$base_root/"* ]] || [[ "$base_dir" == *'/../'* || "$base_dir" == */.. || "$base_dir" == *'/./'* || "$base_dir" == */. ]]; then
+  # Restrict privileged filesystem operations to the dedicated role-owned tree.
+  if [[ ! "$base_dir" =~ ^/var/lib/libvirt/images/idarsi-test-bases(/[A-Za-z0-9._-]+)*$ ]] || [[ "$base_dir" == */. || "$base_dir" == */.. ]]; then
     printf 'IDARSI_TEST_KVM_BASE_DIR must be %s or a subdirectory beneath it.\n' "$base_root" >&2
     exit 1
   fi
-  base_dir=${base_dir%/}
-  for path_probe in /var /var/lib /var/lib/libvirt /var/lib/libvirt/images "$base_root"; do
+  canonical_base_dir=$(readlink -m -- "$base_dir")
+  if [[ "$canonical_base_dir" != "$base_dir" ]]; then
+    printf 'IDARSI_TEST_KVM_BASE_DIR must be canonical: %s\n' "$base_root" >&2
+    exit 1
+  fi
+  path_probe=
+  IFS=/ read -r -a base_components <<<"${base_dir#/}"
+  for component in "${base_components[@]}"; do
+    path_probe+="/$component"
     [[ ! -L "$path_probe" ]] || { printf 'Symlink component is not allowed in IDARSI_TEST_KVM_BASE_DIR: %s\n' "$path_probe" >&2; exit 1; }
   done
   network_info=$(virsh --connect qemu:///system net-info default 2>/dev/null || true)
