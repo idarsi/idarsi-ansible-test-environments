@@ -81,6 +81,11 @@ base_dir=/var/lib/libvirt/images/idarsi-test-bases
 needs_kvm_device=false
 if [[ "$profile" == kvm || "$profile" == all ]]; then
   base_dir=$("$repo_root/scripts/kvm-base-dir")
+  # The test seam is intentionally limited to read-only checks. Installation
+  # always uses the canonical production path from kvm-base-dir.
+  if [[ "$action" == check && ${IDARSI_TEST_KVM_CHECK_BASE_DIR+x} ]]; then
+    base_dir=$IDARSI_TEST_KVM_CHECK_BASE_DIR
+  fi
   network_info=$(virsh --connect qemu:///system net-info default 2>/dev/null || true)
   if [[ -z "$network_info" ]] || ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); active=$2} /^Autostart:/ {gsub(/[[:space:]]/, "", $2); autostart=$2} END {exit(active == "yes" && autostart == "yes" ? 0 : 1)}' <<<"$network_info"; then
     needs_network=true

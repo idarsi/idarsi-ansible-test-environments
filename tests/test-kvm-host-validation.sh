@@ -87,7 +87,8 @@ esac
 SH
 chmod +x "$mock_bin"/*
 export VIRSH_LOG="$tmp/virsh.log" EXPECTED_NETWORK="$root/config/idarsi-test-network.xml"
-export EXPECTED_TARGET=/var/lib/libvirt/images/idarsi-test-bases
+mkdir -p "$tmp/kvm-base-dir"
+export EXPECTED_TARGET="$tmp/kvm-base-dir"
 export PATH="$mock_bin:$PATH"
 
 cat >"$tmp/rocky-10-os-release" <<'EOF'
@@ -102,7 +103,8 @@ EOF
 run_host_check() {
   local scenario=$1 expected_status=$2
   : >"$VIRSH_LOG"
-  if KVM_CASE="$scenario" IDARSI_TEST_KVM_DEVICE="${kvm_device:-/dev/kvm}" \
+  if KVM_CASE="$scenario" IDARSI_TEST_KVM_CHECK_BASE_DIR="$EXPECTED_TARGET" \
+    IDARSI_TEST_KVM_DEVICE="${kvm_device:-/dev/kvm}" \
     IDARSI_TEST_OS_RELEASE_FILE="$tmp/rocky-10-os-release" "$setup" check kvm >"$tmp/check.out" 2>&1; then
     status=0
   else
