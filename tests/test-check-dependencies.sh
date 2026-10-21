@@ -31,6 +31,7 @@ check_fails() {
 
 check_fails "$tmp/empty"
 grep -q 'version: missing' "$tmp/out"
+grep -q "$tmp/empty" "$tmp/out"
 write_collection "$tmp/path-a" ansible posix 2.2.2
 write_collection "$tmp/path-a" containers podman 1.20.2
 VIRTUAL_ENV="$tmp/venv" ANSIBLE_COLLECTIONS_PATH="$tmp/path-a" "$repo_root/scripts/check-dependencies" >/dev/null
@@ -62,6 +63,45 @@ if CONFIG_JSON='[{"name":"COLLECTIONS_PATHS","value":"'"$tmp/path with spaces"'"
   printf 'Expected duplicate configuration records to fail\n' >&2; exit 1
 fi
 grep -q 'Duplicate COLLECTIONS_PATHS records' "$tmp/out"
+
+# Parser errors must stay fatal rather than being hidden by mapfile or fallback.
+mkdir -p "$tmp/venv/collections"
+write_collection "$tmp/venv/collections" ansible posix 2.2.2
+write_collection "$tmp/venv/collections" containers podman 1.20.2
+for invalid_config in 'not-json' '[{"name":"COLLECTIONS_PATHS","value":[]},{"name":"COLLECTIONS_PATHS","value":[]}]'; do
+  if CONFIG_JSON="$invalid_config" VIRTUAL_ENV="$tmp/venv" \
+    ANSIBLE_COLLECTIONS_PATH="$tmp/path with spaces" \
+    "$repo_root/scripts/check-dependencies" >"$tmp/out" 2>&1; then
+    printf 'Expected invalid Ansible configuration to fail\n' >&2; exit 1
+  fi
+  if [[ "$invalid_config" == not-json ]]; then
+    grep -q 'Invalid ansible-config JSON' "$tmp/out"
+  else
+    grep -q 'Duplicate COLLECTIONS_PATHS records' "$tmp/out"
+  fi
+done
+
+# A failed ansible-config command is fatal even when the venv fallback is valid.
+cat > "$tmp/bin/ansible-config" <<'EOF'
+#!/usr/bin/env bash
+exit 9
+EOF
+chmod +x "$tmp/bin/ansible-config"
+if PATH="$tmp/bin:$PATH" VIRTUAL_ENV="$tmp/venv" \
+  "$repo_root/scripts/check-dependencies" >"$tmp/out" 2>&1; then
+  printf 'Expected ansible-config failure\n' >&2; exit 1
+fi
+grep -q 'Failed to read Ansible configuration' "$tmp/out"
+cat > "$tmp/bin/ansible-config" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${CONFIG_JSON:-}" ]]; then printf '%s\n' "$CONFIG_JSON"; else
+  python - "$ANSIBLE_COLLECTIONS_PATH" <<'PYCONFIG'
+import json, sys
+print(json.dumps([{"name":"COLLECTIONS_PATHS", "value":sys.argv[1]}]))
+PYCONFIG
+fi
+EOF
+chmod +x "$tmp/bin/ansible-config"
 
 # Config is authoritative when both path environment variables are set.
 CONFIG_JSON='[{"name":"COLLECTIONS_PATHS","value":["'"$tmp/path with spaces"'"]}]' \

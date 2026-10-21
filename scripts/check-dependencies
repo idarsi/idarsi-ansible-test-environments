@@ -64,8 +64,13 @@ done
 # When checking from an active environment, ensure the pinned collections are
 # actually installed there (repository-only checks remain usable without one).
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
-  config=$(ansible-config dump --format json 2>/dev/null || printf '{}')
-  mapfile -d '' -t collection_paths < <(python - "$config" <<'PYCONFIG'
+  if ! config=$(ansible-config dump --format json); then
+    printf 'Failed to read Ansible configuration with ansible-config.\n' >&2
+    exit 1
+  fi
+  paths_file=$(mktemp "${TMPDIR:-/tmp}/idarsi-collections-paths.XXXXXX")
+  trap 'rm -f "$paths_file"' EXIT
+  if ! python - "$config" >"$paths_file" <<'PYCONFIG'
 import json
 import sys
 
@@ -93,7 +98,10 @@ for path in paths:
     if path:
         sys.stdout.buffer.write(path.encode() + b"\0")
 PYCONFIG
-  )
+  then
+    exit 1
+  fi
+  mapfile -d '' -t collection_paths <"$paths_file"
   if [[ ${#collection_paths[@]} -eq 0 ]]; then
     collection_paths=("$VIRTUAL_ENV/collections")
   fi
@@ -122,8 +130,9 @@ PY
 )
     first=${installed%%$'\n'*}
     [[ -n "$first" && "$first" == "$expected" ]] || {
-      printf 'Required collection %s %s is missing or mismatched; first effective manifest: %s (version: %s). Install or repair this collection at that manifest path.\n' \
-        "$collection" "$expected" "${manifests[0]:-none}" "${first:-missing}" >&2
+      first_root=${collection_paths[0]}
+      printf 'Required collection %s %s is missing or mismatched; first effective location: %s (manifest: %s; version: %s). Install or repair this collection at that manifest path.\n' \
+        "$collection" "$expected" "$first_root" "${manifests[0]:-$first_root/ansible_collections/$namespace/$name/MANIFEST.json}" "${first:-missing}" >&2
       exit 1
     }
     [[ $((${#manifests[@]})) -eq 1 ]] || {
