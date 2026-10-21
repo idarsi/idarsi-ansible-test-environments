@@ -65,8 +65,18 @@ needs_network=false
 needs_test_network=false
 needs_base_pool=false
 base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
+base_root=/var/lib/libvirt/images/idarsi-test-bases
 needs_kvm_device=false
 if [[ "$profile" == kvm || "$profile" == all ]]; then
+  # Do not allow privileged filesystem operations to follow caller-controlled paths.
+  if [[ "$base_dir" != "$base_root" && "$base_dir" != "$base_root/"* ]] || [[ "$base_dir" == *'/../'* || "$base_dir" == */.. || "$base_dir" == *'/./'* || "$base_dir" == */. ]]; then
+    printf 'IDARSI_TEST_KVM_BASE_DIR must be %s or a subdirectory beneath it.\n' "$base_root" >&2
+    exit 1
+  fi
+  base_dir=${base_dir%/}
+  for path_probe in /var /var/lib /var/lib/libvirt /var/lib/libvirt/images "$base_root"; do
+    [[ ! -L "$path_probe" ]] || { printf 'Symlink component is not allowed in IDARSI_TEST_KVM_BASE_DIR: %s\n' "$path_probe" >&2; exit 1; }
+  done
   network_info=$(virsh --connect qemu:///system net-info default 2>/dev/null || true)
   if [[ -z "$network_info" ]] || ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); active=$2} /^Autostart:/ {gsub(/[[:space:]]/, "", $2); autostart=$2} END {exit(active == "yes" && autostart == "yes" ? 0 : 1)}' <<<"$network_info"; then
     needs_network=true
@@ -86,7 +96,14 @@ def identity(root):
     if bridge is None or ip is None:
         return None
     return root.findtext('name'), bridge.get('name'), ip.get('address'), ip.get('netmask')
-if identity(actual) != identity(expected):
+def shape(root):
+    forwarding = root.find('forward')
+    ip = root.find('ip')
+    dhcp = None if ip is None else ip.find('dhcp')
+    ranges = [] if dhcp is None else dhcp.findall('range')
+    return (identity(root), None if forwarding is None else forwarding.get('mode'),
+            None if len(ranges) != 1 else (ranges[0].get('start'), ranges[0].get('end')))
+if shape(actual) != (identity(expected), 'nat', ('192.168.250.100', '192.168.250.199')):
     raise SystemExit(1)
 PY
     then
@@ -100,8 +117,8 @@ PY
   pool_info=$(virsh --connect qemu:///system pool-info idarsi-test-bases 2>/dev/null || true)
   if [[ -n "$pool_info" ]]; then
     pool_xml=$(virsh --connect qemu:///system pool-dumpxml idarsi-test-bases)
-    pool_target=$(python3 -c 'import sys,xml.etree.ElementTree as E; print(E.fromstring(sys.stdin.read()).findtext("target/path", ""))' <<<"$pool_xml")
-    if [[ "$pool_target" != "$base_dir" ]]; then
+    read -r pool_type pool_target < <(python3 -c 'import sys,xml.etree.ElementTree as E; r=E.fromstring(sys.stdin.read()); print(r.get("type", ""), r.findtext("target/path", ""))' <<<"$pool_xml")
+    if [[ "$pool_type" != dir || "$pool_target" != "$base_dir" ]]; then
       printf 'Conflicting idarsi-test-bases pool target %s (expected %s); refusing to replace it.\n' "$pool_target" "$base_dir" >&2
       exit 1
     fi
@@ -191,6 +208,17 @@ if [[ "$profile" == kvm || "$profile" == all ]]; then
   "${virsh_admin[@]}" net-autostart default >/dev/null
   if ! "${virsh_admin[@]}" net-info idarsi-test >/dev/null 2>&1; then
     "${virsh_admin[@]}" net-define "$repo_root/config/idarsi-test-network.xml"
+  else
+    net_xml=$("${virsh_admin[@]}" net-dumpxml idarsi-test)
+    python3 - "$repo_root/config/idarsi-test-network.xml" "$net_xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+expected=ET.parse(sys.argv[1]).getroot(); actual=ET.fromstring(sys.argv[2])
+def fields(r):
+    f=r.find('forward'); b=r.find('bridge'); ip=r.find('ip'); dhcp=None if ip is None else ip.find('dhcp'); ranges=[] if dhcp is None else dhcp.findall('range')
+    return (r.findtext('name'), None if f is None else f.get('mode'), None if b is None else b.get('name'), None if ip is None else ip.get('address'), None if ip is None else ip.get('netmask'), [] if dhcp is None else [(x.get('start'),x.get('end')) for x in ranges])
+if fields(actual) != ('idarsi-test','nat','virbr-idarsi','192.168.250.1','255.255.255.0',[('192.168.250.100','192.168.250.199')]):
+    raise SystemExit('Conflicting libvirt idarsi-test network; refusing to replace it.')
+PY
   fi
   test_network_info=$("${virsh_admin[@]}" net-info idarsi-test)
   if ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); found=($2 == "yes")} END {exit(found ? 0 : 1)}' <<<"$test_network_info"; then
