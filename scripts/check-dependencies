@@ -38,6 +38,14 @@ for environment in ansible-min ansible-current ansible-next; do
       containers.podman) version_key=containers_podman ;;
     esac
     expected=$(awk -F'"' -v key="$version_key" '$0 ~ "^  " key ":" {print $2; exit}' "$versions")
+    [[ $(grep -Ec "^  $version_key:" "$versions") -eq 1 ]] || {
+      printf 'Expected exactly one declared pin for %s in %s\n' "$collection" "$versions" >&2
+      exit 1
+    }
+    [[ $(grep -Fc "  - name: \"$collection\"" "$collections") -eq 1 ]] || {
+      printf 'Expected exactly one declaration for %s in %s\n' "$collection" "$collections" >&2
+      exit 1
+    }
     awk -v name="$collection" -v expected="$expected" '
       $0 == "  - name: \"" name "\"" { getline; if ($0 == "    version: \"" expected "\"") found=1 }
       END { exit(found ? 0 : 1) }
@@ -56,28 +64,46 @@ done
 # When checking from an active environment, ensure the pinned collections are
 # actually installed there (repository-only checks remain usable without one).
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
-  collection_path="$VIRTUAL_ENV/collections/ansible_collections"
+  if [[ -n "${ANSIBLE_COLLECTIONS_PATH:-}" ]]; then
+    collection_paths=${ANSIBLE_COLLECTIONS_PATH//:/ }
+  elif [[ -n "${ANSIBLE_COLLECTIONS_PATHS:-}" ]]; then
+    collection_paths=${ANSIBLE_COLLECTIONS_PATHS//:/ }
+  else
+    config=$(ansible-config dump --format json 2>/dev/null || printf '{}')
+    collection_paths=$(python -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(d.get("COLLECTIONS_PATHS", {}).get("value", [])))' <<<"$config")
+  fi
+  [[ -n "$collection_paths" ]] || collection_paths="$VIRTUAL_ENV/collections"
   for collection in ansible.posix containers.podman; do
     case "$collection" in
       ansible.posix) namespace=ansible; name=posix; version_key=ansible_posix ;;
       containers.podman) namespace=containers; name=podman; version_key=containers_podman ;;
     esac
     expected=$(awk -F'"' -v key="$version_key" '$0 ~ "^  " key ":" {print $2; exit}' "$versions")
-    manifest="$collection_path/$namespace/$name/MANIFEST.json"
-    installed=$(python - "$manifest" <<'PY'
+    manifests=()
+    for root in $collection_paths; do
+      manifest="$root/ansible_collections/$namespace/$name/MANIFEST.json"
+      [[ -f "$manifest" ]] && manifests+=("$manifest")
+    done
+    installed=$(python - "${manifests[@]}" <<'PY'
 import json
 import sys
 
-try:
-    with open(sys.argv[1], encoding="utf-8") as manifest:
-        print(json.load(manifest).get("collection_info", {}).get("version", ""))
-except (OSError, json.JSONDecodeError):
-    print("")
+for path in sys.argv[1:]:
+    try:
+        with open(path, encoding="utf-8") as manifest:
+            print(json.load(manifest).get("collection_info", {}).get("version", ""))
+    except (OSError, json.JSONDecodeError):
+        print("")
 PY
 )
-    [[ "$installed" == "$expected" ]] || {
-      printf 'Required collection %s %s is missing or mismatched in %s (found: %s). Rerun: install.sh <profile> %s\n' \
-        "$collection" "$expected" "$VIRTUAL_ENV" "${installed:-missing}" "${VIRTUAL_ENV##*/}" >&2
+    first=${installed%%$'\n'*}
+    [[ -n "$first" && "$first" == "$expected" ]] || {
+      printf 'Required collection %s %s is missing or mismatched in active Ansible collection paths (precedence order; found: %s). Exit the active environment and rerun setup-venv, or use install.sh <profile> <environment>; setup-venv recreates the environment.\n' \
+        "$collection" "$expected" "${first:-missing}" >&2
+      exit 1
+    }
+    [[ $((${#manifests[@]})) -eq 1 ]] || {
+      printf 'Collection %s is installed more than once in active Ansible collection paths (precedence order: %s). Remove the shadowed copy.\n' "$collection" "$installed" >&2
       exit 1
     }
   done
