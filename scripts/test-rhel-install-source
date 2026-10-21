@@ -20,6 +20,7 @@ chmod +x "$tmp/bin/sudo"
 # Keep Rocky sources offline and exercise versioned RHEL ISO discovery.
 touch "$tmp/media/rhel-9.8-x86_64-dvd.iso" \
   "$tmp/media/rhel-9.10-x86_64-dvd.iso" \
+  "$tmp/media/rhel-9foo-x86_64-dvd.iso" \
   "$tmp/media/rhel-10.2-x86_64-dvd.iso"
 chmod 0600 "$tmp/media/rhel-9.8-x86_64-dvd.iso" \
   "$tmp/media/rhel-9.10-x86_64-dvd.iso" \
@@ -29,9 +30,10 @@ env PATH="$tmp/bin:$PATH" \
   IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
   IDARSI_TEST_KVM_INSTALL_SOURCE=base-only:rocky9 \
   IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10=base-only:rocky10 \
-  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/discovery.log"
+  "$fixture/scripts/prepare-kvm-install-source" >"$tmp/discovery.log" 2>&1
 [[ $(cat "$fixture/.kvm-install-source-rhel9") == "$tmp/media/rhel-9.10-x86_64-dvd.iso" ]]
 [[ $(cat "$fixture/.kvm-install-source-rhel10") == "$tmp/media/rhel-10.2-x86_64-dvd.iso" ]]
+grep -q 'Ignoring discovered RHEL 9 candidate with an invalid DVD ISO filename: .*rhel-9foo-x86_64-dvd.iso' "$tmp/discovery.log"
 [[ $(stat -c '%a' "$tmp/media") == 711 ]]
 [[ $(stat -c '%a' "$tmp/media/rhel-9.10-x86_64-dvd.iso") == 644 ]]
 

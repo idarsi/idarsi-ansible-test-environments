@@ -34,14 +34,22 @@ save_source() {
 }
 
 find_existing_image() {
-  local pattern=$1 found="" stat_cmd=(stat)
+  local pattern=$1 found="" validator=${2:-} major=${3:-} candidate stat_cmd=(stat)
+  local -a candidates=()
   [[ -d "$install_dir" ]] || return 0
   if [[ -r "$install_dir" && -x "$install_dir" ]]; then
-    found=$(find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V | tail -n 1)
+    mapfile -t candidates < <(find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V)
   else
-    found=$(sudo find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V | tail -n 1)
+    mapfile -t candidates < <(sudo find "$install_dir" -maxdepth 1 -type f -iname "$pattern" -print | sort -V)
     stat_cmd=(sudo stat)
   fi
+  for candidate in "${candidates[@]}"; do
+    if [[ -n "$validator" ]] && ! "$validator" "$candidate" "$major"; then
+      printf 'Ignoring discovered RHEL %s candidate with an invalid DVD ISO filename: %s\n' "$major" "$candidate" >&2
+      continue
+    fi
+    found=$candidate
+  done
   if [[ -n "$found" ]]; then
     # libvirt commonly runs QEMU as an unprivileged account. Grant only the
     # missing path-traverse and file-read bits needed by that account.
@@ -167,7 +175,7 @@ for i in 0 1; do
     fi
   fi
 
-  existing=$(find_existing_image "rhel-${major}*-x86_64-dvd.iso")
+  existing=$(find_existing_image "rhel-${major}*-x86_64-dvd.iso" valid_rhel_source_name "$major")
   if [[ -n "$existing" ]]; then
     printf '%s install source: %s\n' "${rhel_labels[$i]}" "$existing"
     printf '%s\n' "$existing" >"$repo_root/${rhel_state_names[$i]}"
