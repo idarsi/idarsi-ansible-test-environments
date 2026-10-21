@@ -23,6 +23,25 @@ write_collection "$tmp/path-a" ansible posix 2.2.2
 write_collection "$tmp/path-a" containers podman 1.20.2
 VIRTUAL_ENV="$tmp/venv" ANSIBLE_COLLECTIONS_PATH="$tmp/path-a" "$repo_root/scripts/check-dependencies" >/dev/null
 
+# Config JSON is a list of records; path strings and spaces must be preserved.
+mkdir -p "$tmp/bin" "$tmp/path with spaces"
+write_collection "$tmp/path with spaces" ansible posix 2.2.2
+write_collection "$tmp/path with spaces" containers podman 1.20.2
+cat > "$tmp/bin/ansible-config" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$CONFIG_JSON"
+EOF
+chmod +x "$tmp/bin/ansible-config"
+CONFIG_JSON='[{"name":"COLLECTIONS_PATHS","value":"'"$tmp/path with spaces"'"}]' \
+  PATH="$tmp/bin:$PATH" VIRTUAL_ENV="$tmp/venv" ANSIBLE_COLLECTIONS_PATH= ANSIBLE_COLLECTIONS_PATHS= \
+  "$repo_root/scripts/check-dependencies" >/dev/null
+CONFIG_JSON='[{"name":"COLLECTIONS_PATHS","value":["'"$tmp/path with spaces"'"]}]' \
+  PATH="$tmp/bin:$PATH" VIRTUAL_ENV="$tmp/venv" ANSIBLE_COLLECTIONS_PATH= ANSIBLE_COLLECTIONS_PATHS= \
+  "$repo_root/scripts/check-dependencies" >/dev/null
+# Legacy variable is split on colons, without splitting individual path spaces.
+VIRTUAL_ENV="$tmp/venv" ANSIBLE_COLLECTIONS_PATH= ANSIBLE_COLLECTIONS_PATHS="$tmp/path with spaces" \
+  "$repo_root/scripts/check-dependencies" >/dev/null
+
 write_collection "$tmp/path-a" ansible posix 0.0.1
 check_fails "$tmp/path-a"
 grep -q 'found: 0.0.1' "$tmp/out"
@@ -32,6 +51,7 @@ write_collection "$tmp/path-b" ansible posix 2.2.2
 write_collection "$tmp/path-a" ansible posix 2.2.2
 check_fails "$tmp/path-a:$tmp/path-b"
 grep -q 'installed more than once' "$tmp/out"
+grep -q 'Remove shadowed manifests:' "$tmp/out"
 
 mkdir -p "$tmp/repo/scripts" "$tmp/repo/environments"
 cp "$repo_root/scripts/check-dependencies" "$tmp/repo/scripts/"

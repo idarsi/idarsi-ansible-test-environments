@@ -26,8 +26,8 @@ for environment in ansible-min ansible-current ansible-next; do
     "ansible-lint==$(awk -F'"' '/^ansible_lint:/{print $2}' "$versions")" \
     "molecule==$(awk -F'"' '/^molecule:/{print $2}' "$versions")" \
     "molecule-plugins[podman]==$(awk -F'"' '/^molecule_podman:/{print $2}' "$versions")"; do
-    grep -Fxq "$pin" "$requirements" || {
-      printf 'Missing pin %s in %s\n' "$pin" "$requirements" >&2
+    [[ $(grep -Fxc "$pin" "$requirements") -eq 1 ]] || {
+      printf 'Expected exactly one pin %s in %s\n' "$pin" "$requirements" >&2
       exit 1
     }
   done
@@ -65,14 +65,15 @@ done
 # actually installed there (repository-only checks remain usable without one).
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
   if [[ -n "${ANSIBLE_COLLECTIONS_PATH:-}" ]]; then
-    collection_paths=${ANSIBLE_COLLECTIONS_PATH//:/ }
+    collection_paths_raw=$ANSIBLE_COLLECTIONS_PATH
   elif [[ -n "${ANSIBLE_COLLECTIONS_PATHS:-}" ]]; then
-    collection_paths=${ANSIBLE_COLLECTIONS_PATHS//:/ }
+    collection_paths_raw=$ANSIBLE_COLLECTIONS_PATHS
   else
     config=$(ansible-config dump --format json 2>/dev/null || printf '{}')
-    collection_paths=$(python -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(d.get("COLLECTIONS_PATHS", {}).get("value", [])))' <<<"$config")
+    collection_paths_raw=$(python -c 'import json,sys; d=json.load(sys.stdin); rs=d if isinstance(d,list) else []; r=next((x for x in rs if isinstance(x,dict) and x.get("name")=="COLLECTIONS_PATHS"), {}); v=r.get("value", []); print(":".join(v) if isinstance(v,list) else v if isinstance(v,str) else "")' <<<"$config")
   fi
-  [[ -n "$collection_paths" ]] || collection_paths="$VIRTUAL_ENV/collections"
+  [[ -n "${collection_paths_raw:-}" ]] || collection_paths_raw="$VIRTUAL_ENV/collections"
+  IFS=: read -r -a collection_paths <<< "$collection_paths_raw"
   for collection in ansible.posix containers.podman; do
     case "$collection" in
       ansible.posix) namespace=ansible; name=posix; version_key=ansible_posix ;;
@@ -80,7 +81,7 @@ if [[ -n "${VIRTUAL_ENV:-}" ]]; then
     esac
     expected=$(awk -F'"' -v key="$version_key" '$0 ~ "^  " key ":" {print $2; exit}' "$versions")
     manifests=()
-    for root in $collection_paths; do
+    for root in "${collection_paths[@]}"; do
       manifest="$root/ansible_collections/$namespace/$name/MANIFEST.json"
       [[ -f "$manifest" ]] && manifests+=("$manifest")
     done
@@ -98,12 +99,12 @@ PY
 )
     first=${installed%%$'\n'*}
     [[ -n "$first" && "$first" == "$expected" ]] || {
-      printf 'Required collection %s %s is missing or mismatched in active Ansible collection paths (precedence order; found: %s). Exit the active environment and rerun setup-venv, or use install.sh <profile> <environment>; setup-venv recreates the environment.\n' \
+      printf 'Required collection %s %s is missing or mismatched in active Ansible collection paths (precedence order; found: %s). Exit the active environment and rerun setup-venv, or use install.sh with the intended profile and environment; setup-venv recreates the environment.\n' \
         "$collection" "$expected" "${first:-missing}" >&2
       exit 1
     }
     [[ $((${#manifests[@]})) -eq 1 ]] || {
-      printf 'Collection %s is installed more than once in active Ansible collection paths (precedence order: %s). Remove the shadowed copy.\n' "$collection" "$installed" >&2
+      printf 'Collection %s is installed more than once in active Ansible collection paths (precedence order: %s). Remove shadowed manifests: %s\n' "$collection" "$installed" "${manifests[*]}" >&2
       exit 1
     }
   done
