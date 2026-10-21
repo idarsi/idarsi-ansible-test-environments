@@ -68,6 +68,13 @@ grep -q 'Duplicate COLLECTIONS_PATHS records' "$tmp/out"
 mkdir -p "$tmp/venv/collections"
 write_collection "$tmp/venv/collections" ansible posix 2.2.2
 write_collection "$tmp/venv/collections" containers podman 1.20.2
+# Empty or absent config values use the active virtualenv's collections path.
+# Keep this valid fallback in place below to prove parser errors remain fatal.
+for valid_config in '[]' '[{"name":"DEFAULT_LOCAL_TMP","value":"/tmp"}]' '[{"name":"COLLECTIONS_PATHS","value":[]}]'; do
+  CONFIG_JSON="$valid_config" VIRTUAL_ENV="$tmp/venv" \
+    ANSIBLE_COLLECTIONS_PATH="$tmp/path with spaces" \
+    "$repo_root/scripts/check-dependencies" >/dev/null
+done
 for invalid_config in 'not-json' '[{"name":"COLLECTIONS_PATHS","value":[]},{"name":"COLLECTIONS_PATHS","value":[]}]'; do
   if CONFIG_JSON="$invalid_config" VIRTUAL_ENV="$tmp/venv" \
     ANSIBLE_COLLECTIONS_PATH="$tmp/path with spaces" \
