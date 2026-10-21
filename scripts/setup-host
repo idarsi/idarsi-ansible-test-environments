@@ -24,14 +24,27 @@ case "$profile" in
   *) usage; exit 2 ;;
 esac
 
-[[ -r /etc/os-release ]] || { printf 'Cannot identify host OS\n' >&2; exit 1; }
-# shellcheck disable=SC1091
-. /etc/os-release
-case "${ID:-}:${VERSION_ID%%.*}" in
+os_release_file=/etc/os-release
+# Tests may supply a fixture to read-only checks; installation always uses the
+# host's real OS metadata.
+if [[ "$action" == check && ${IDARSI_TEST_OS_RELEASE_FILE+x} ]]; then
+  os_release_file=$IDARSI_TEST_OS_RELEASE_FILE
+fi
+[[ -r "$os_release_file" ]] || { printf 'Cannot identify host OS\n' >&2; exit 1; }
+# Read only the two fields needed here rather than evaluating the file as shell.
+os_id=
+os_version_id=
+while IFS='=' read -r key value; do
+  case "$key" in
+    ID) os_id=${value#\"}; os_id=${os_id%\"}; os_id=${os_id#\'}; os_id=${os_id%\'} ;;
+    VERSION_ID) os_version_id=${value#\"}; os_version_id=${os_version_id%\"}; os_version_id=${os_version_id#\'}; os_version_id=${os_version_id%\'} ;;
+  esac
+done < "$os_release_file"
+case "${os_id:-}:${os_version_id%%.*}" in
   rocky:10) distro=rocky ;;
   fedora:44) distro=fedora ;;
   *)
-    printf 'Host setup supports Rocky Linux 10 and Fedora 44; detected %s %s\n' "${ID:-unknown}" "${VERSION_ID:-unknown}" >&2
+    printf 'Host setup supports Rocky Linux 10 and Fedora 44; detected %s %s\n' "${os_id:-unknown}" "${os_version_id:-unknown}" >&2
     exit 1
     ;;
 esac

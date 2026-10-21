@@ -90,10 +90,20 @@ export VIRSH_LOG="$tmp/virsh.log" EXPECTED_NETWORK="$root/config/idarsi-test-net
 export EXPECTED_TARGET=/var/lib/libvirt/images/idarsi-test-bases
 export PATH="$mock_bin:$PATH"
 
+cat >"$tmp/rocky-10-os-release" <<'EOF'
+ID=rocky
+VERSION_ID="10"
+EOF
+cat >"$tmp/ubuntu-os-release" <<'EOF'
+ID=ubuntu
+VERSION_ID="24.04"
+EOF
+
 run_host_check() {
   local scenario=$1 expected_status=$2
   : >"$VIRSH_LOG"
-  if KVM_CASE="$scenario" IDARSI_TEST_KVM_DEVICE="${kvm_device:-/dev/kvm}" "$setup" check kvm >"$tmp/check.out" 2>&1; then
+  if KVM_CASE="$scenario" IDARSI_TEST_KVM_DEVICE="${kvm_device:-/dev/kvm}" \
+    IDARSI_TEST_OS_RELEASE_FILE="$tmp/rocky-10-os-release" "$setup" check kvm >"$tmp/check.out" 2>&1; then
     status=0
   else
     status=$?
@@ -112,6 +122,13 @@ run_host_check() {
 
 kvm_device=/dev/null
 run_host_check ready 0
+: >"$VIRSH_LOG"
+if IDARSI_TEST_OS_RELEASE_FILE="$tmp/ubuntu-os-release" "$setup" check kvm >"$tmp/check.out" 2>&1; then
+  printf 'Unsupported Ubuntu OS-release fixture was accepted\n' >&2
+  exit 1
+fi
+grep -q 'detected ubuntu 24.04' "$tmp/check.out"
+[[ ! -s "$VIRSH_LOG" ]]
 kvm_device="$tmp/not-a-char-device"
 touch "$kvm_device"
 run_host_check ready 1
