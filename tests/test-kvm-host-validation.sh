@@ -6,25 +6,20 @@ setup="$root/scripts/setup-host"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# Invalid paths must fail before OS discovery, sudo, or any other host operation.
-for path in / /var/lib/libvirt/images /tmp /var/lib/libvirt/images/idarsi-test-bases/../other \
-  /var/lib/libvirt/images/idarsi-test-bases/child\ name /var/lib/libvirt/images/idarsi-test-bases/; do
-  if IDARSI_TEST_KVM_BASE_DIR="$path" "$setup" check kvm >"$tmp/out" 2>&1; then
+# Production accepts exactly the fixed canonical path; temporary canonical and
+# symlink paths are both rejected before any host operation.
+base_dir="$root/scripts/kvm-base-dir"
+[[ $(env -u IDARSI_TEST_KVM_BASE_DIR "$base_dir") == /var/lib/libvirt/images/idarsi-test-bases ]]
+for path in "$tmp/canonical" "$tmp/link" / /var/lib/libvirt/images /tmp \
+  /var/lib/libvirt/images/idarsi-test-bases/../other \
+  /var/lib/libvirt/images/idarsi-test-bases/child\ name; do
+  if [[ "$path" == "$tmp/link" ]]; then ln -s "$tmp/canonical" "$path"; fi
+  if IDARSI_TEST_KVM_BASE_DIR="$path" "$base_dir" >"$tmp/out" 2>&1; then
     printf 'Unsafe path was accepted: %s\n' "$path" >&2
     exit 1
   fi
   grep -q 'IDARSI_TEST_KVM_BASE_DIR' "$tmp/out"
 done
-
-# Reject symlinks in any existing path component, including below the safe root.
-if [[ ! -L /var/lib/libvirt/images/idarsi-test-bases ]]; then
-  link="$tmp/idarsi-test-bases-link"
-  ln -s /tmp "$link"
-  if IDARSI_TEST_KVM_BASE_DIR="$link" "$setup" check kvm >"$tmp/out" 2>&1; then
-    printf 'Symlink path was accepted: %s\n' "$link" >&2
-    exit 1
-  fi
-fi
 
 # Verify the same XML contract enforced against a defined network: full NAT,
 # bridge/address/netmask and exact single DHCP range, not just its identity.

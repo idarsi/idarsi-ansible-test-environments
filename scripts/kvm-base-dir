@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+default=/var/lib/libvirt/images/idarsi-test-bases
+requested=${IDARSI_TEST_KVM_BASE_DIR:-$default}
+if [[ "$requested" != "$default" ]]; then
+  printf 'IDARSI_TEST_KVM_BASE_DIR is fixed at the safe canonical path %s; customization is not supported.\n' "$default" >&2
+  exit 1
+fi
+printf '%s\n' "$default"

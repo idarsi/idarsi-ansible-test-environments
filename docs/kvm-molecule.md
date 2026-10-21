@@ -18,12 +18,15 @@ the default and shared `idarsi-test` libvirt networks. The shared network uses
 assign stable addresses outside that pool. The host needs hardware
 virtualization enabled and a readable/writable `/dev/kvm`. Setup adds the
 invoking user to the `libvirt` group; log out and back in for that membership
-to take effect. The same setup creates and enables the `idarsi-test-bases`
-directory storage pool at `/var/lib/libvirt/images/idarsi-test-bases` (or the
-path selected by `IDARSI_TEST_KVM_BASE_DIR`) for reusable base images. Existing
-network and pool definitions are validated and are never replaced when they
-conflict with the shared network subnet/bridge or configured pool path. Check
-the host before running Molecule:
+to take effect. Setup creates and enables the `idarsi-test-bases` directory
+storage pool at `/var/lib/libvirt/images/idarsi-test-bases` for reusable base
+images. The networks and pool type/target are validated before installation;
+conflicting definitions are refused, never replaced. Installation starts and
+enables valid existing resources as needed. `scripts/setup-host check kvm` is
+read-only and reports missing requirements. `IDARSI_TEST_KVM_BASE_DIR` is
+accepted only when exactly equal to the canonical default path; custom paths
+and symlink-based alternatives are unsupported to keep privileged directory
+operations confined. Check the host before running Molecule:
 
 ```bash
 scripts/setup-host check kvm

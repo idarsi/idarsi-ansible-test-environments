@@ -7,7 +7,7 @@ driver:
 
 platforms:
   - name: rocky10
-    image: localhost/molecule-rocky10:latest
+    image: quay.io/rockylinux/rockylinux:10
     command: /bin/sleep infinity
     pre_build_image: false
 

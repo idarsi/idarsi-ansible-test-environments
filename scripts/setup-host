@@ -64,26 +64,10 @@ fi
 needs_network=false
 needs_test_network=false
 needs_base_pool=false
-base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
-base_root=/var/lib/libvirt/images/idarsi-test-bases
+base_dir=/var/lib/libvirt/images/idarsi-test-bases
 needs_kvm_device=false
 if [[ "$profile" == kvm || "$profile" == all ]]; then
-  # Restrict privileged filesystem operations to the dedicated role-owned tree.
-  if [[ ! "$base_dir" =~ ^/var/lib/libvirt/images/idarsi-test-bases(/[A-Za-z0-9._-]+)*$ ]] || [[ "$base_dir" == */. || "$base_dir" == */.. ]]; then
-    printf 'IDARSI_TEST_KVM_BASE_DIR must be %s or a subdirectory beneath it.\n' "$base_root" >&2
-    exit 1
-  fi
-  canonical_base_dir=$(readlink -m -- "$base_dir")
-  if [[ "$canonical_base_dir" != "$base_dir" ]]; then
-    printf 'IDARSI_TEST_KVM_BASE_DIR must be canonical: %s\n' "$base_root" >&2
-    exit 1
-  fi
-  path_probe=
-  IFS=/ read -r -a base_components <<<"${base_dir#/}"
-  for component in "${base_components[@]}"; do
-    path_probe+="/$component"
-    [[ ! -L "$path_probe" ]] || { printf 'Symlink component is not allowed in IDARSI_TEST_KVM_BASE_DIR: %s\n' "$path_probe" >&2; exit 1; }
-  done
+  base_dir=$("$repo_root/scripts/kvm-base-dir")
   network_info=$(virsh --connect qemu:///system net-info default 2>/dev/null || true)
   if [[ -z "$network_info" ]] || ! awk -F: '/^Active:/ {gsub(/[[:space:]]/, "", $2); active=$2} /^Autostart:/ {gsub(/[[:space:]]/, "", $2); autostart=$2} END {exit(active == "yes" && autostart == "yes" ? 0 : 1)}' <<<"$network_info"; then
     needs_network=true
@@ -236,7 +220,7 @@ PY
   "${sudo_cmd[@]}" mkdir -p "$base_dir"
   "${sudo_cmd[@]}" chown "${SUDO_USER:-${USER:-root}}:libvirt" "$base_dir"
   "${sudo_cmd[@]}" chmod 0755 "$base_dir"
-  if command -v restorecon >/dev/null 2>&1; then "${sudo_cmd[@]}" restorecon -RF "$base_dir"; fi
+  if command -v restorecon >/dev/null 2>&1; then "${sudo_cmd[@]}" restorecon -F "$base_dir"; fi
   if ! "${virsh_admin[@]}" pool-info idarsi-test-bases >/dev/null 2>&1; then
     pool_xml=$(mktemp)
     python3 - "$base_dir" >"$pool_xml" <<'PY'

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
+base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
 cache_root=${XDG_CACHE_HOME:-$HOME/.cache}/idarsi-ansible-test-environments/kvm-base-locks
 revision=${KVM_BASE_IMAGE_REVISION:-1}
 

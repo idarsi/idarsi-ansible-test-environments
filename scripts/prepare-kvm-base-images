@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 kickstart="$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl"
-base_dir=${IDARSI_TEST_KVM_BASE_DIR:-/var/lib/libvirt/images/idarsi-test-bases}
+base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
 base_owner=${SUDO_USER:-$(id -un)}
 declare -a states=(.kvm-install-source .kvm-install-source-rocky10)
 declare -a keys=(rocky9 rocky10)
