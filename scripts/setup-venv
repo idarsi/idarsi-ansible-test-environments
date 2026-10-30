@@ -20,7 +20,7 @@ if [[ ! -x $(command -v "$python_bin" 2>/dev/null || true) && -r /etc/os-release
   # are not necessarily available as installable RPMs.
   # shellcheck disable=SC1091
   . /etc/os-release
-  if [[ ${ID:-} == fedora && ${VERSION_ID%%.*} == 44 ]] && command -v python3 >/dev/null; then
+  if [[ ${ID:-} == fedora && ${VERSION_ID%%.*} =~ ^(43|44)$ ]] && command -v python3 >/dev/null; then
     python_bin=python3
   fi
 fi

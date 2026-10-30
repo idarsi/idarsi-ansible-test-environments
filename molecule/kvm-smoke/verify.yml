@@ -17,6 +17,6 @@
       ansible.builtin.assert:
         that:
           - ansible_facts.distribution in ["Rocky", "Fedora"]
-          - (ansible_facts.distribution != "Fedora" or ansible_facts.distribution_major_version == "44")
+          - (ansible_facts.distribution != "Fedora" or ansible_facts.distribution_major_version in ["43", "44"])
           - smoke_marker.stat.exists
           - selinux_mode.stdout == "Enforcing"

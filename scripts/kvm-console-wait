@@ -15,7 +15,7 @@ find "$log_root" -maxdepth 1 -type f -name 'molecule-*.console.log' -mtime +7 -d
 printf 'Waiting up to %s seconds for a new Molecule KVM guest...\n' "$timeout_seconds"
 while (( SECONDS < deadline )); do
   while IFS= read -r domain; do
-    [[ "$domain" =~ ^molecule-(rocky10|fedora44)-[a-f0-9]{8}$ ]] || continue
+    [[ "$domain" =~ ^molecule-(rocky10|fedora43|fedora44)-[a-f0-9]{8}$ ]] || continue
     case "|$before|" in *"|$domain|"*) continue ;; esac
     state=$(virsh --connect "$uri" domstate "$domain" 2>/dev/null || true)
     [[ "$state" == running ]] || continue
@@ -37,4 +37,4 @@ while (( SECONDS < deadline )); do
   sleep 2
 done
 
-printf 'No new running Rocky 10 or Fedora 44 Molecule guest appeared. Check the Molecule pane for the failure.\n'
+printf 'No new running Rocky 10 or Fedora 43/44 Molecule guest appeared. Check the Molecule pane for the failure.\n'

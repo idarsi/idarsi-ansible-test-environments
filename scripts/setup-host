@@ -42,9 +42,9 @@ while IFS='=' read -r key value; do
 done < "$os_release_file"
 case "${os_id:-}:${os_version_id%%.*}" in
   rocky:10) distro=rocky ;;
-  fedora:44) distro=fedora ;;
+  fedora:43|fedora:44) distro=fedora ;;
   *)
-    printf 'Host setup supports Rocky Linux 10 and Fedora 44; detected %s %s\n' "${os_id:-unknown}" "${os_version_id:-unknown}" >&2
+    printf 'Host setup supports Rocky Linux 10 and Fedora 43 or 44; detected %s %s\n' "${os_id:-unknown}" "${os_version_id:-unknown}" >&2
     exit 1
     ;;
 esac

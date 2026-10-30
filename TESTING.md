@@ -1,6 +1,6 @@
 # Testing
 
-This repository prepares a reusable Rocky Linux 10 or Fedora 44 host for Molecule tests in
+This repository prepares a reusable Rocky Linux 10 or Fedora 43/44 host for Molecule tests in
 Idarsi Ansible role repositories. The shared controller venv supports two
 target backends: Podman for fast tests and KVM + Kickstart for full virtual
 machines. Role-specific scenarios and tests remain in each role repository.

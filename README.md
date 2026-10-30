@@ -1,6 +1,6 @@
 # Idarsi Ansible Test Environments
 
-This repository prepares a Rocky Linux 10 or Fedora 44 host for running Molecule tests in
+This repository prepares a Rocky Linux 10 or Fedora 43/44 host for running Molecule tests in
 Idarsi Ansible role repositories. Molecule scenarios stay in each role and
 choose one of two target backends:
 
@@ -16,7 +16,7 @@ containerized Ansible controller.
 
 ## Install
 
-Clone this repository on Rocky Linux 10 or Fedora 44 and run the installer as your regular
+Clone this repository on Rocky Linux 10 or Fedora 43/44 and run the installer as your regular
 user. It uses `sudo` when installing host packages or writing the shared KVM
 ISO into libvirt's boot directory. By default, it
 prepares both backends and installs the `ansible-current` venv:
