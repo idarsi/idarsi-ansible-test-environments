@@ -1,0 +1,32 @@
+text
+cdrom
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+rootpw --lock
+user --name=@@SSH_USER@@ --groups=wheel
+sshkey --username=@@SSH_USER@@ "@@SSH_PUBLIC_KEY@@"
+selinux --enforcing
+firewall --enabled --service=ssh
+@@NETWORK_CONFIGURATION@@
+bootloader --timeout=1
+zerombr
+clearpart --all --initlabel --drives=vda
+autopart --type=lvm
+services --enabled=sshd
+
+%packages
+@^minimal-environment
+openssh-server
+sudo
+python3
+%end
+
+%post --erroronfail
+cat > /etc/sudoers.d/90-molecule <<'SUDOERS'
+@@SSH_USER@@ ALL=(ALL) NOPASSWD: ALL
+SUDOERS
+chmod 0440 /etc/sudoers.d/90-molecule
+%end
+
+reboot

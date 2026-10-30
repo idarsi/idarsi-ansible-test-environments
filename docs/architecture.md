@@ -3,7 +3,7 @@
 ## Scope
 
 This repository installs the tools required to run Molecule on Rocky Linux 10
-or Fedora 44
+or Fedora 43/44
 and provides a shared KVM + Kickstart guest lifecycle. It supports two target
 backends:
 
