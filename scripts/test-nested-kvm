@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+if [[ ${IDARSI_RUN_NESTED_KVM_TEST:-} != 1 ]]; then
+  printf 'SKIP: set IDARSI_RUN_NESTED_KVM_TEST=1 to opt in to the nested KVM integration test.\n'
+  exit 0
+fi
+iso=${1:-${IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10:-}}
+if [[ -z $iso || ! -r $iso || ! -f $iso ]]; then
+  printf 'FAIL: provide a readable Rocky 10 install ISO as argument or IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10.\n' >&2
+  exit 1
+fi
+for tool in virsh virt-install ssh ssh-keygen tar python3; do
+  command -v "$tool" >/dev/null || { printf 'FAIL: required command missing: %s\n' "$tool" >&2; exit 1; }
+done
+[[ -r /dev/kvm && -w /dev/kvm ]] || { printf 'SKIP: /dev/kvm is unavailable or not writable; nested virtualization is unsupported here.\n'; exit 0; }
+if "$repo_root/scripts/check-nested-kvm-capability"; then
+  :
+else
+  capability_status=$?
+  [[ $capability_status == 77 ]] && exit 0
+  exit "$capability_status"
+fi
+uri=${KVM_LIBVIRT_URI:-qemu:///system}
+umask 077
+work=$(mktemp -d "${TMPDIR:-/tmp}/idarsi-nested-kvm.XXXXXXXX")
+hash=$(printf '%s' "$work" | sha256sum | cut -c1-8)
+outer="nested-kvm-${hash}"
+export MOLECULE_EPHEMERAL_DIRECTORY="$work/molecule"
+mkdir -m 700 "$MOLECULE_EPHEMERAL_DIRECTORY"
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  if [[ -n ${address:-} ]]; then
+    ssh -F /dev/null -i "$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      "molecule@$address" "sudo virsh destroy 'inner-$hash' >/dev/null 2>&1 || true; sudo virsh undefine 'inner-$hash' --remove-all-storage >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+  fi
+  # The inner VM and its disk exist only inside this uniquely owned outer VM.
+  # Destroying the outer VM on the host is the ultimate cleanup, even if SSH fails.
+  if ! MOLECULE_EPHEMERAL_DIRECTORY="$MOLECULE_EPHEMERAL_DIRECTORY" KVM_LIBVIRT_URI="$uri" \
+    "$repo_root/scripts/kvm-vm" destroy "$outer"; then
+    printf 'FAIL: could not destroy outer guest %s; cleanup may be incomplete.\n' "$outer" >&2
+    status=1
+  fi
+  rm -rf -- "$work"
+  exit "$status"
+}
+address=
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+export MOLECULE_SCENARIO_DIRECTORY="$repo_root/molecule/kvm-smoke"
+export KVM_LIBVIRT_URI="$uri" KVM_CPU_HOST_PASSTHROUGH=true
+export KVM_VCPUS=${KVM_NESTED_OUTER_VCPUS:-4} KVM_MEMORY_MB=${KVM_NESTED_OUTER_MEMORY_MB:-8192}
+export KVM_INSTALL_TIMEOUT=${KVM_NESTED_INSTALL_TIMEOUT:-3600}
+export KVM_BASE_IMAGE_MODE=off
+result=$("$repo_root/scripts/kvm-vm" create "$outer" "$iso" "$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl")
+address=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["address"])' "$result")
+key="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"
+
+# Install this checkout's KVM host setup in the outer guest, then prove KVM by
+# launching an inner guest with the same trusted installation ISO.
+# Transfer only the files needed to install and exercise this checkout. This
+# intentionally excludes inventory, SSH material, local configuration, and Git metadata.
+  tar -C "$repo_root" -czf "$work/repo.tgz" \
+  config/idarsi-test-network.xml scripts/setup-host scripts/kvm-base-dir
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "molecule@$address" 'mkdir -p ~/nested-kvm-repo'
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "molecule@$address" 'python3 -c '\''import pathlib, sys, tarfile; tarfile.open(fileobj=sys.stdin.buffer, mode="r|gz").extractall(path=pathlib.Path.home() / "nested-kvm-repo", filter="data")'\''' < "$work/repo.tgz"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "molecule@$address" "sudo env IDARSI_ENABLE_NESTED_KVM=1 bash ~/nested-kvm-repo/scripts/setup-host install kvm"
+scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$iso" "molecule@$address:/tmp/nested-kvm-install.iso"
+inner="inner-$hash"
+inner_key="$work/inner_ed25519"
+ssh-keygen -q -t ed25519 -N '' -f "$inner_key"
+network='network --bootproto=dhcp --device=link --activate'
+if [[ -n ${KVM_NESTED_INNER_IPV4_ADDRESS:-} ]]; then
+  PYTHONPATH="$repo_root/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "${KVM_NESTED_INNER_IPV4_ADDRESS}" "${KVM_NESTED_INNER_NETMASK:-255.255.255.0}" "${KVM_NESTED_INNER_GATEWAY:-192.168.250.1}" "${KVM_NESTED_INNER_NAMESERVER:-192.168.250.1}" <<'PY'
+import sys
+from nested_ipv4 import validate
+try:
+    validate(*sys.argv[1:])
+except ValueError as error:
+    raise SystemExit(f"Invalid static inner IPv4 configuration: {error}") from error
+PY
+  network="network --bootproto=static --ip=${KVM_NESTED_INNER_IPV4_ADDRESS} --netmask=${KVM_NESTED_INNER_NETMASK:-255.255.255.0} --gateway=${KVM_NESTED_INNER_GATEWAY:-192.168.250.1} --nameserver=${KVM_NESTED_INNER_NAMESERVER:-192.168.250.1} --device=link --activate"
+fi
+python3 - "$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl" "$work/inner.ks" "$inner_key.pub" "$network" <<'PY'
+from pathlib import Path
+import sys
+template = Path(sys.argv[1]).read_text()
+pubkey = Path(sys.argv[3]).read_text().strip()
+for token in ('@@SSH_USER@@', '@@SSH_PUBLIC_KEY@@', '@@NETWORK_CONFIGURATION@@'):
+    if token not in template:
+        raise SystemExit(f'Kickstart template is missing {token}')
+Path(sys.argv[2]).write_text(template.replace('@@SSH_USER@@', 'molecule').replace('@@SSH_PUBLIC_KEY@@', pubkey).replace('@@NETWORK_CONFIGURATION@@', sys.argv[4]))
+PY
+chmod 600 "$work/inner.ks"
+inner_address=${KVM_NESTED_INNER_IPV4_ADDRESS:-}
+scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/inner.ks" "molecule@$address:/tmp/inner.ks"
+scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$inner_key" "$inner_key.pub" "molecule@$address:/tmp/"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "molecule@$address" "sudo virt-host-validate qemu && grep -Eq '(vmx|svm)' /proc/cpuinfo && sudo virt-install --connect qemu:///system --name '$inner' --memory 2048 --vcpus 2 --disk size=10 --network network=idarsi-test,model=virtio --os-variant rocky9 --location /tmp/nested-kvm-install.iso --initrd-inject /tmp/inner.ks --extra-args 'inst.ks=file:/inner.ks console=ttyS0,115200n8' --graphics none --noautoconsole --wait 360"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "install -d -m 700 \"\$HOME/.ssh/nested-kvm\" && install -m 600 /tmp/inner_ed25519 \"\$HOME/.ssh/nested-kvm/inner_ed25519\" && install -m 644 /tmp/inner_ed25519.pub \"\$HOME/.ssh/nested-kvm/inner_ed25519.pub\" && rm -f /tmp/inner_ed25519 /tmp/inner_ed25519.pub"
+if [[ -z ${KVM_NESTED_INNER_IPV4_ADDRESS:-} ]]; then
+  inner_address=
+fi
+for ((i=0; i<360; i++)); do
+  if [[ -z $inner_address ]]; then
+    inner_address=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domifaddr '$inner' --source lease --full 2>/dev/null | awk '\$3 == \"ipv4\" {sub(/\\/.*/, \"\", \$4); print \$4; exit}'" 2>/dev/null || true)
+  fi
+  [[ -n $inner_address ]] || { sleep 5; continue; }
+  if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'" >/dev/null 2>&1; then break; fi
+  sleep 5
+done
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
+printf 'PASS: outer guest installed this repository KVM setup and booted an inner guest.\n'

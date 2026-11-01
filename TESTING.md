@@ -27,3 +27,39 @@ for versioned ISO discovery, explicit overrides, and `setup-venv` activation;
 it uses temporary files and mocked environment-creation commands, without
 network access or libvirt. Role behavior is verified by each role's own
 Molecule scenarios.
+
+An explicit manual nested-KVM integration test is available on a capable KVM
+host (not part of regular tests). After `./install.sh kvm` and configuring the
+Rocky 10 ISO, run `IDARSI_RUN_NESTED_KVM_TEST=1 scripts/test-nested-kvm` (or
+pass the ISO path). It creates a uniquely named outer guest with host-passthrough
+CPU, installs this checkout's KVM setup inside it, and boots an inner guest.
+Missing nested virtualization support is reported as `SKIP`; once opted in,
+missing prerequisites or test failures are `FAIL`.
+The prerequisite check requires readable CPU flags exposing `vmx` with an
+active `kvm_intel` module reporting `nested=1`, or `svm` with active
+`kvm_amd` reporting `nested=1`. Libvirt capability XML is not used because it
+does not consistently advertise these CPU flags as named features. Run
+`bash tests/test-nested-kvm-capability.sh` for VM-free detector coverage. The
+inner guest exists only
+inside the outer guest, so host-side destruction of the uniquely named outer
+VM (including its disk) is ultimate cleanup even if SSH is unavailable. Inner
+cleanup over SSH is best effort; failure to destroy the outer VM is reported.
+Private temporary artifacts are removed on exit; no host-wide uninstall runs.
+Allow at least 8 GiB RAM and four CPUs for the outer guest, in addition to the
+inner guest resources.
+For static IPv4 configuration, `KVM_NETMASK` (outer guest) and
+`KVM_NESTED_INNER_NETMASK` (inner guest) must each be a dotted IPv4 netmask
+(for example, `255.255.255.0`); CIDR prefix lengths such as `/24` are rejected
+because Kickstart's `--netmask` option requires the dotted form. The inner
+guest uses the repository-created `idarsi-test` libvirt network (gateway and
+nameserver `192.168.250.1` by default). Static inner addresses must be usable
+members of `192.168.250.0/24` outside the DHCP pool `.100-.199`; gateway and
+nameserver must also be usable members of that subnet. Run
+`python3 scripts/test-nested-ipv4.py` for focused, VM-free validation coverage.
+The test transfers only `config/idarsi-test-network.xml`, `scripts/setup-host`,
+and `scripts/kvm-base-dir` to the outer guest (not repository inventory, SSH
+keys, or local configuration). It installs the KVM host automation directly,
+without invoking the general-purpose `install.sh kvm` image-cache preparation.
+The inner-guest SSH private key is stored mode `0600` under the `molecule`
+user's home directory; optional static inner IPv4 settings must satisfy the
+subnet and DHCP-pool constraints above.

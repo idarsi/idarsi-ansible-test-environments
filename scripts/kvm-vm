@@ -133,6 +133,9 @@ import sys
 path, name, address, gateway, netmask, nameserver = sys.argv[1:]
 for value in (address, gateway, nameserver):
     ipaddress.IPv4Address(value)
+if "/" in netmask:
+    raise SystemExit("KVM_NETMASK must be a dotted IPv4 netmask, not a prefix length")
+ipaddress.IPv4Address(netmask)
 prefix = ipaddress.IPv4Network(f"0.0.0.0/{netmask}").prefixlen
 with open(path, "w") as f:
     f.write(f"[connection]\nid=idarsi-test-{name}\ntype=ethernet\nautoconnect=true\nautoconnect-priority=999\nmatch-device=type:ethernet\n")
@@ -160,6 +163,9 @@ import sys
 address, gateway, netmask, nameserver = sys.argv[1:]
 for value in (address, gateway, nameserver):
     ipaddress.IPv4Address(value)
+if "/" in netmask:
+    raise SystemExit("KVM_NETMASK must be a dotted IPv4 netmask, not a prefix length")
+ipaddress.IPv4Address(netmask)
 ipaddress.IPv4Network(f"0.0.0.0/{netmask}")
 PY
       network_configuration="network --bootproto=static --ip=${ipv4_address} --netmask=${netmask} --gateway=${gateway} --nameserver=${nameserver} --device=link --activate"
@@ -202,6 +208,9 @@ PY
       --os-variant generic \
       --graphics none \
       --noautoconsole)
+    if [[ ${KVM_CPU_HOST_PASSTHROUGH:-false} == true ]]; then
+      virt_install_args+=(--cpu host-passthrough)
+    fi
     if [[ "$base_mode" == auto ]]; then
       virt_install_args+=(--import)
     else
