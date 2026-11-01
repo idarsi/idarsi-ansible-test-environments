@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cpuinfo=${1:-/proc/cpuinfo}
+modules=${2:-/sys/module}
+
+if [[ ! -r $cpuinfo ]]; then
+  printf 'SKIP: CPU flags are unavailable (%s is not readable).\n' "$cpuinfo"
+  exit 77
+fi
+if ! grep -q '^flags[[:space:]]*:' "$cpuinfo"; then
+  printf 'SKIP: CPU flags are unavailable in %s.\n' "$cpuinfo"
+  exit 77
+fi
+
+if grep '^flags[[:space:]]*:' "$cpuinfo" | grep -w vmx >/dev/null; then
+  vendor=Intel
+  flag=vmx
+  module=kvm_intel
+elif grep '^flags[[:space:]]*:' "$cpuinfo" | grep -w svm >/dev/null; then
+  vendor=AMD
+  flag=svm
+  module=kvm_amd
+else
+  printf 'SKIP: CPU exposes neither Intel VMX nor AMD SVM virtualization flags.\n'
+  exit 77
+fi
+
+parameter="$modules/$module/parameters/nested"
+if [[ ! -r $parameter ]]; then
+  printf 'SKIP: %s CPU flag is present, but active KVM module %s nested parameter is unavailable (%s).\n' "$flag" "$module" "$parameter"
+  exit 77
+fi
+value=$(<"$parameter")
+if [[ $value != 1 && $value != Y && $value != y ]]; then
+  printf 'SKIP: %s CPU flag is present, but %s nested virtualization is disabled (nested=%s).\n' "$vendor" "$module" "$value"
+  exit 77
+fi
+printf 'PASS: %s CPU virtualization flag %s and %s nested virtualization are enabled.\n' "$vendor" "$flag" "$module"
