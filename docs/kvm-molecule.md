@@ -26,7 +26,14 @@ replaced. The default network is only required to exist, be active, and have
 autostart enabled; its XML schema is managed by libvirt and is not constrained
 by this setup. Installation starts and enables valid existing resources as
 needed. `scripts/setup-host check kvm` is
-read-only and reports missing requirements. `IDARSI_TEST_KVM_BASE_DIR` is
+read-only and reports missing requirements. Nested virtualization is optional
+and off by default. Set `IDARSI_ENABLE_NESTED_KVM=1` when running `install.sh
+kvm` (or `scripts/setup-host install kvm`) to configure `nested=1` for the
+detected Intel or AMD KVM module. Unsupported vendors are skipped. Existing
+conflicting `/etc/modprobe.d/idarsi-nested-kvm.conf` files are preserved and
+reported. This is install-only; modules are never unloaded or reloaded, so the
+setting applies on a future module load. The `check` action remains read-only.
+`IDARSI_TEST_KVM_BASE_DIR` is
 accepted only when exactly equal to the canonical default path; custom paths
 and symlink-based alternatives are unsupported to keep privileged directory
 operations confined. Check the host before running Molecule:

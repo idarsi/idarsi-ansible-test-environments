@@ -69,6 +69,20 @@ needs_libvirt=false
 if [[ "$profile" == kvm || "$profile" == all ]]; then
   systemctl is-enabled --quiet libvirtd && systemctl is-active --quiet libvirtd || needs_libvirt=true
 fi
+
+# Nested virtualization is an opt-in, install-only host setting. Never attempt
+# to unload/reload KVM modules: the setting takes effect on a later module load.
+nested_kvm=false
+nested_kvm_message=
+if [[ ( "$profile" == kvm || "$profile" == all ) && ${IDARSI_ENABLE_NESTED_KVM:-0} == 1 ]]; then
+  nested_kvm=true
+  cpu_vendor=$(awk -F: '/vendor_id/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null || true)
+  case "$cpu_vendor" in
+    GenuineIntel) nested_module=kvm_intel ;;
+    AuthenticAMD) nested_module=kvm_amd ;;
+    *) nested_kvm_message='Nested KVM skipped: unsupported or unidentified CPU vendor.' ; nested_kvm=false ;;
+  esac
+fi
 requesting_user=${SUDO_USER:-${USER:-}}
 needs_libvirt_group=false
 if [[ ( "$profile" == kvm || "$profile" == all ) && -n "$requesting_user" && "$requesting_user" != root ]]; then
@@ -126,7 +140,13 @@ PY
   pool_info=$(virsh --connect qemu:///system pool-info idarsi-test-bases 2>/dev/null || true)
   if [[ -n "$pool_info" ]]; then
     pool_xml=$(virsh --connect qemu:///system pool-dumpxml idarsi-test-bases)
-    read -r pool_type pool_target < <(python3 -c 'import sys,xml.etree.ElementTree as E; r=E.fromstring(sys.stdin.read()); print(r.get("type", ""), r.findtext("target/path", ""))' <<<"$pool_xml")
+    read -r pool_type pool_target < <(python3 - "$pool_xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+root = ET.fromstring(sys.argv[1])
+print(root.get("type", ""), root.findtext("target/path", ""))
+PY
+    )
     if [[ "$pool_type" != dir || "$pool_target" != "$base_dir" ]]; then
       printf 'Conflicting idarsi-test-bases pool target %s (expected %s); refusing to replace it.\n' "$pool_target" "$base_dir" >&2
       exit 1
@@ -143,7 +163,8 @@ PY
   [[ -c "$kvm_device" && -r "$kvm_device" && -w "$kvm_device" ]] || needs_kvm_device=true
 fi
 
-if [[ ${#missing[@]} -eq 0 && $needs_libvirt == false && $needs_libvirt_group == false && $needs_network == false && $needs_test_network == false && $needs_base_pool == false && $needs_kvm_device == false ]]; then
+if [[ ${#missing[@]} -eq 0 && $needs_libvirt == false && $needs_libvirt_group == false && $needs_network == false && $needs_test_network == false && $needs_base_pool == false && $needs_kvm_device == false && $nested_kvm == false ]]; then
+  [[ -n $nested_kvm_message ]] && printf '%s\n' "$nested_kvm_message"
   printf 'All %s host requirements are ready.\n' "$profile"
   exit 0
 fi
@@ -168,7 +189,58 @@ fi
 if [[ $needs_kvm_device == true ]]; then
   printf 'The current user cannot access /dev/kvm, or hardware virtualization is unavailable.\n' >&2
 fi
+if [[ $nested_kvm == true ]]; then
+  printf 'Nested KVM is requested but not enabled; installation can configure it for a future module load.\n' >&2
+fi
 [[ "$action" == install ]] || exit 1
+
+if [[ $nested_kvm == true ]]; then
+  nested_config=/etc/modprobe.d/idarsi-nested-kvm.conf
+  # The test seam is strictly unprivileged: never pass a caller-controlled
+  # destination to a privileged write, even when it is beneath /tmp.
+  if [[ ${IDARSI_TEST_NESTED_KVM_CONFIG+x} && $action == install ]]; then
+    if [[ $EUID -eq 0 ]]; then
+      printf 'IDARSI_TEST_NESTED_KVM_CONFIG is not allowed when running as root.\n' >&2
+      exit 2
+    fi
+    test_config_dir=$(dirname -- "$IDARSI_TEST_NESTED_KVM_CONFIG")
+    test_tmp_dir=$(cd /tmp && pwd -P)
+    # Require an existing directory: never create a path before containment
+    # has been verified. pwd -P resolves symlinked ancestors for the check.
+    [[ -d "$test_config_dir" ]] || { printf 'Unsafe nested KVM test config path\n' >&2; exit 2; }
+    test_config_dir=$(cd -- "$test_config_dir" && pwd -P)
+    [[ "$test_config_dir/" == "$test_tmp_dir/"* ]] || { printf 'Unsafe nested KVM test config path\n' >&2; exit 2; }
+    nested_config=$IDARSI_TEST_NESTED_KVM_CONFIG
+  fi
+  # -e follows symlinks and is false for dangling links. Reject every symlink,
+  # then use noclobber for exclusive creation to close the check/write race.
+  if [[ -L $nested_config ]]; then
+    printf 'Nested KVM config destination is a symlink at %s; refusing to follow it.\n' "$nested_config" >&2
+    exit 1
+  elif [[ -e $nested_config ]]; then
+    if ! grep -Eq "^[[:space:]]*options[[:space:]]+$nested_module([[:space:]]|$).*nested=(Y|1)([[:space:]]|$)" "$nested_config"; then
+      printf 'Nested KVM config conflict at %s; refusing to replace it.\n' "$nested_config" >&2
+      exit 1
+    else
+      nested_kvm_message='Nested KVM is configured; it will apply on a future module load.'
+      nested_kvm=false
+    fi
+  else
+    if [[ -n ${IDARSI_TEST_NESTED_KVM_CONFIG+x} ]]; then
+      (set -o noclobber; printf 'options %s nested=1\n' "$nested_module" >"$nested_config") || {
+        printf 'Nested KVM config destination appeared during creation at %s; refusing to overwrite it.\n' "$nested_config" >&2
+        exit 1
+      }
+    else
+      printf 'options %s nested=1\n' "$nested_module" | sudo sh -c 'set -o noclobber; cat >"$1"' sh "$nested_config" || {
+        printf 'Nested KVM config destination appeared during creation at %s; refusing to overwrite it.\n' "$nested_config" >&2
+        exit 1
+      }
+    fi
+    nested_kvm_message='Nested KVM configured; it will apply on a future module load.'
+    nested_kvm=false
+  fi
+fi
 
 if [[ ${#missing[@]} -gt 0 ]]; then
   if [[ $EUID -eq 0 ]]; then
@@ -186,6 +258,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 
 if [[ "$profile" == kvm || "$profile" == all ]]; then
+  [[ -n $nested_kvm_message ]] && printf '%s\n' "$nested_kvm_message"
   if [[ $needs_libvirt_group == true ]]; then
     if [[ $EUID -eq 0 ]]; then
       usermod -aG libvirt "$requesting_user"
