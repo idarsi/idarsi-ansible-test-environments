@@ -63,5 +63,9 @@ if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10:-} && -r $(printf '%q' "$repo_
   IFS= read -r IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 <$(printf '%q' "$repo_root/.kvm-install-source-rhel10")
   export IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10
 fi
+if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44:-} && -r $(printf '%q' "$repo_root/.kvm-install-source-fedora44") ]]; then
+  IFS= read -r IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44 <$(printf '%q' "$repo_root/.kvm-install-source-fedora44")
+  export IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44
+fi
 ACTIVATE_HOOK
 printf 'Created %s\nActivate with: source %s/bin/activate\n' "$venv" "$venv"

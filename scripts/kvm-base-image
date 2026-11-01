@@ -20,6 +20,8 @@ source_os_key() {
     printf 'rhel%s' "${BASH_REMATCH[1]}"
   elif [[ "$source" =~ $rocky_re ]]; then
     printf 'rocky%s' "${BASH_REMATCH[1]}"
+  elif [[ "$source" =~ [Ff]edora-[Ss]erver-dvd-x86_64-([0-9]+)-[0-9.]+\.iso$ ]]; then
+    printf 'fedora%s' "${BASH_REMATCH[1]}"
   elif [[ "$source" =~ $fedora_re ]]; then
     printf 'fedora%s' "${BASH_REMATCH[1]}"
   else
@@ -88,6 +90,10 @@ prepare_image_for_libvirt() {
 action=$1
 shift
 case "$action" in
+  source-os-key)
+    [[ $# -eq 1 ]] || { usage; exit 2; }
+    source_os_key "$1"
+    ;;
   find)
     [[ $# -eq 4 ]] || { usage; exit 2; }
     find_base "$1" "$2" "$3" "$4"
