@@ -2,11 +2,11 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-kickstart="$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl"
 base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
 base_owner=${SUDO_USER:-$(id -un)}
-declare -a states=(.kvm-install-source .kvm-install-source-rocky10 .kvm-install-source-rhel9 .kvm-install-source-rhel10)
-declare -a keys=(rocky9 rocky10 rhel9 rhel10)
+declare -a states=(.kvm-install-source .kvm-install-source-rocky10 .kvm-install-source-rhel9 .kvm-install-source-rhel10 .kvm-install-source-fedora44)
+declare -a keys=(rocky9 rocky10 rhel9 rhel10 fedora44)
+declare -a kickstarts=(rocky9-10.ks.tmpl rocky9-10.ks.tmpl rocky9-10.ks.tmpl rocky9-10.ks.tmpl fedora-44.ks.tmpl)
 
 if [[ $EUID -eq 0 ]]; then
   mkdir -p "$base_dir"
@@ -24,12 +24,13 @@ else
 fi
 
 ready=0
-for i in 0 1 2 3; do
+for i in "${!states[@]}"; do
   state_file="$repo_root/${states[$i]}"
   [[ -r "$state_file" ]] || continue
   IFS= read -r source <"$state_file" || true
   [[ -n "$source" ]] || continue
   printf '\nPreparing reusable %s KVM base image.\n' "${keys[$i]}"
+  kickstart="$repo_root/examples/molecule-kvm/${kickstarts[$i]}"
   "$repo_root/scripts/kvm-base-image" ensure "$source" "$kickstart" molecule "${KVM_BASE_DISK_SIZE_GB:-30}" "${KVM_NETWORK:-idarsi-test}" "${KVM_LIBVIRT_URI:-qemu:///system}"
   ready=$((ready + 1))
 done

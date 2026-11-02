@@ -79,6 +79,15 @@ original full ISO install path, or change `KVM_BASE_IMAGE_REVISION` to build a
 fresh base after changing OS preparation. The installer prepares the
 base-image directory so Molecule does not need an interactive sudo prompt.
 
+Fedora 44 images use `.kvm-install-source-fedora44` (set up by the Fedora 44
+source preparation flow) and the Fedora 44 Kickstart. To prepare the image
+before running Molecule, run `scripts/prepare-kvm-base-images` from an
+interactive terminal after source setup. This one-time command may prompt for
+sudo credentials while fixing ownership and permissions; subsequent Molecule
+runs reuse the prepared base image without prompting. The helper prepares
+Rocky and RHEL images with the Rocky Kickstart, and Fedora 44 with its matching
+Fedora Kickstart.
+
 ## Add the shared scenario
 
 Copy the example files into the role repository and edit the ISO path. Use the
