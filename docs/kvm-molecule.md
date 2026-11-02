@@ -91,6 +91,12 @@ examples/molecule-kvm/fedora-43.ks.tmpl  -> role/molecule/kvm/fedora-43.ks.tmpl
 examples/molecule-kvm/fedora-44.ks.tmpl  -> role/molecule/kvm/fedora-44.ks.tmpl
 ```
 
+The Fedora 44 Kickstart uses the `@core` package group, which is available on
+the Fedora Server DVD. Do not substitute `@^minimal-environment`: that
+environment group is absent from the DVD repository metadata and causes
+Anaconda's package selection to stall. The template explicitly adds
+`openssh-server`, `sudo`, and `python3` for Molecule access and provisioning.
+
 The KVM scenario also needs the role's existing converge and verify playbooks.
 Copy those from its current Molecule scenario, or set their paths in the KVM
 scenario's `ansible.playbooks` section. This keeps the same role tests running
