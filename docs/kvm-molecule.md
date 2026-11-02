@@ -184,3 +184,29 @@ path. The serial console output is saved under
 `/tmp/idarsi-ansible-test-environments/kvm-logs/`; the console pane prints its
 path. Both log types older than seven days are removed at the next run. Run one
 KVM smoke test at a time so the new guest can be identified unambiguously.
+
+For a diagnostic Fedora 44 installation, use the dedicated scenario and
+wrapper (the ISO path is passed explicitly, without relying on activation-hook
+state):
+
+```bash
+source .venv/ansible-current/bin/activate
+./verify-install-fedora44-kvm.sh "$(cat .kvm-install-source-fedora44)"
+```
+
+Use the official Fedora Server DVD x86_64 ISO named
+`Fedora-Server-dvd-x86_64-44-*.iso` (for example, the release ISO from
+`https://getfedora.org/server/`). The wrapper rejects other filenames; this
+filename check is a guard against accidentally installing a different distro,
+not cryptographic provenance verification. Verify the ISO checksum/signature
+against Fedora's published release metadata before use.
+
+This uses `molecule/kvm-smoke-fedora44`, Fedora 44 Kickstart and the same
+shared KVM create/destroy, converge, tmux, logging, and serial-console flow.
+Its install timeout is 7200 seconds to allow observing the longer Fedora
+installer; Rocky remains at 3600 seconds. Fedora's tmux-launched Molecule
+command sets `KVM_BASE_IMAGE_MODE=off`, forcing installation from the supplied
+ISO rather than reusing cached base images. With base images disabled,
+`kvm-vm` does not infer an OS key from the Kickstart basename. The wrapper
+requires a readable local ISO, and the scenario verifies Fedora 44 and
+enforcing SELinux.
