@@ -25,7 +25,8 @@ for environment in ansible-min ansible-current ansible-next; do
     "ansible-runner==$(awk -F'"' '/^ansible_runner:/{print $2}' "$versions")" \
     "ansible-lint==$(awk -F'"' '/^ansible_lint:/{print $2}' "$versions")" \
     "molecule==$(awk -F'"' '/^molecule:/{print $2}' "$versions")" \
-    "molecule-plugins[podman]==$(awk -F'"' '/^molecule_podman:/{print $2}' "$versions")"; do
+    "molecule-plugins[podman]==$(awk -F'"' '/^molecule_podman:/{print $2}' "$versions")" \
+    "setuptools==$(awk -F'"' '/^setuptools:/{print $2}' "$versions")"; do
     [[ $(grep -Fxc "$pin" "$requirements") -eq 1 ]] || {
       printf 'Expected exactly one pin %s in %s\n' "$pin" "$requirements" >&2
       exit 1

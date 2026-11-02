@@ -15,6 +15,7 @@ ansible_runner: "2.4.3"
 ansible_lint: "26.8.0"
 molecule: "26.8.0"
 molecule_podman: "26.7.15"
+setuptools: "80.9.0"
 collections:
   ansible_posix: "2.2.2"
   containers_podman: "1.20.2"
