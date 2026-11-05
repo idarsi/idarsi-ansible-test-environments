@@ -7,9 +7,9 @@ machines. Role-specific scenarios and tests remain in each role repository.
 
 | Ansible environment | ansible-core | ansible-lint | Python | Typical use |
 | --- | --- | --- | --- | --- |
-| `ansible-min` | 2.19.12 | 26.8.0 | 3.12 | Minimum supported line |
+| `ansible-min` | 2.15.13 | 6.22.2 | 3.9 | Minimum supported line |
 | `ansible-current` | 2.20.8 | 26.8.0 | 3.12 | Default development baseline |
-| `ansible-next` | 2.21.3 | 26.8.0 | 3.12 | Forward compatibility |
+| `ansible-next` | 2.21.3 | 26.8.0 | 3.14 | Forward compatibility |
 
 Run `./install.sh [podman|kvm|all] [ansible-min|ansible-current|ansible-next]`
 to prepare the host and selected venv. Activate the venv before running the

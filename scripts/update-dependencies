@@ -12,9 +12,9 @@ for environment in ansible-min ansible-current ansible-next; do
   key=${environment#ansible-}
   ansible_core=$(yq -r ".ansible.$key" "$versions")
   ansible_runner_pin=$(yq -r '.ansible_runner' "$versions")
-  ansible_lint_pin=$(yq -r '.ansible_lint' "$versions")
-  molecule_pin=$(yq -r '.molecule' "$versions")
-  molecule_podman_pin=$(yq -r '.molecule_podman' "$versions")
+  ansible_lint_pin=$(yq -r ".ansible_lint.$key" "$versions")
+  molecule_pin=$(yq -r ".molecule.$key" "$versions")
+  molecule_podman_pin=$(yq -r ".molecule_podman.$key" "$versions")
   requirements="$repo_root/environments/$environment/requirements.txt"
   cat >"$requirements" <<EOF
 ansible-core==$ansible_core
