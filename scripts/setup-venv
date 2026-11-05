@@ -21,7 +21,10 @@ if [[ ! -x $(command -v "$python_bin" 2>/dev/null || true) && -r /etc/os-release
   # shellcheck disable=SC1091
   . /etc/os-release
   if [[ ${ID:-} == fedora && ${VERSION_ID%%.*} =~ ^(43|44)$ ]] && command -v python3 >/dev/null; then
-    python_bin=python3
+    python3_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    if [[ $python3_version == "$python_version" ]]; then
+      python_bin=python3
+    fi
   fi
 fi
 command -v "$python_bin" >/dev/null || {

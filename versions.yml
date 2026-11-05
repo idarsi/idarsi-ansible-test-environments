@@ -4,17 +4,26 @@ updated: "2026-10-18"
 # These are the release lines tested by Idarsi roles. They are not a public
 # requirement for role users.
 ansible:
-  min: "2.19.12"
+  min: "2.15.13"
   current: "2.20.8"
   next: "2.21.3"
 python:
-  min: "3.12"
+  min: "3.9"
   current: "3.12"
-  next: "3.12"
+  next: "3.14"
 ansible_runner: "2.4.3"
-ansible_lint: "26.8.0"
-molecule: "26.8.0"
-molecule_podman: "26.7.15"
+ansible_lint:
+  min: "6.22.2"
+  current: "26.8.0"
+  next: "26.8.0"
+molecule:
+  min: "6.0.3"
+  current: "26.8.0"
+  next: "26.8.0"
+molecule_podman:
+  min: "23.5.0"
+  current: "26.7.15"
+  next: "26.7.15"
 collections:
   ansible_posix: "2.2.2"
   containers_podman: "1.20.2"

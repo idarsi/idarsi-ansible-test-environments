@@ -13,6 +13,16 @@ version_value() {
   ' "$versions"
 }
 
+environment_pin() {
+  local section=$1 key=$2
+  version_value "$section" "$key"
+}
+
+global_pin() {
+  local key=$1
+  awk -F'"' -v key="$key" '$0 ~ "^" key ":" {print $2; exit}' "$versions"
+}
+
 for environment in ansible-min ansible-current ansible-next; do
   key=${environment#ansible-}
   ansible_version=$(version_value ansible "$key")
@@ -22,10 +32,10 @@ for environment in ansible-min ansible-current ansible-next; do
 
   for pin in \
     "ansible-core==$ansible_version" \
-    "ansible-runner==$(awk -F'"' '/^ansible_runner:/{print $2}' "$versions")" \
-    "ansible-lint==$(awk -F'"' '/^ansible_lint:/{print $2}' "$versions")" \
-    "molecule==$(awk -F'"' '/^molecule:/{print $2}' "$versions")" \
-    "molecule-plugins[podman]==$(awk -F'"' '/^molecule_podman:/{print $2}' "$versions")"; do
+    "ansible-runner==$(global_pin ansible_runner)" \
+    "ansible-lint==$(environment_pin ansible_lint "$key")" \
+    "molecule==$(environment_pin molecule "$key")" \
+    "molecule-plugins[podman]==$(environment_pin molecule_podman "$key")"; do
     [[ $(grep -Fxc "$pin" "$requirements") -eq 1 ]] || {
       printf 'Expected exactly one pin %s in %s\n' "$pin" "$requirements" >&2
       exit 1
@@ -37,7 +47,7 @@ for environment in ansible-min ansible-current ansible-next; do
       ansible.posix) version_key=ansible_posix ;;
       containers.podman) version_key=containers_podman ;;
     esac
-    expected=$(awk -F'"' -v key="$version_key" '$0 ~ "^  " key ":" {print $2; exit}' "$versions")
+    expected=$(version_value collections "$version_key")
     [[ $(grep -Ec "^  $version_key:" "$versions") -eq 1 ]] || {
       printf 'Expected exactly one declared pin for %s in %s\n' "$collection" "$versions" >&2
       exit 1

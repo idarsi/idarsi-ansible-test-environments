@@ -1,5 +1,5 @@
-ansible-core==2.19.12
+ansible-core==2.15.13
 ansible-runner==2.4.3
-ansible-lint==26.8.0
-molecule==26.8.0
-molecule-plugins[podman]==26.7.15
+ansible-lint==6.22.2
+molecule==6.0.3
+molecule-plugins[podman]==23.5.0

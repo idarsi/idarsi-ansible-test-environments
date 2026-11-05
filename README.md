@@ -71,10 +71,11 @@ creating its guests. Set `KVM_BASE_IMAGE_MODE=off` to use the legacy full ISO
 installation path. Set `KVM_BASE_IMAGE_REVISION` to a new value when you need
 to invalidate old base images.
 
-The available Ansible Core versions and shared Ansible Lint version are pinned
-in [versions.yml](versions.yml):
-`ansible-min` (2.19.12), `ansible-current` (2.20.8), and `ansible-next`
-(2.21.3); Ansible Lint is 26.8.0 in each environment. Each has a separate
+The available Ansible Core and Ansible Lint versions are pinned in
+[versions.yml](versions.yml):
+`ansible-min` (Ansible Core 2.15.13, Ansible Lint 6.22.2),
+`ansible-current` (Ansible Core 2.20.8, Ansible Lint 26.8.0), and
+`ansible-next` (Ansible Core 2.21.3, Ansible Lint 26.8.0). Each has a separate
 `.venv/` directory. Activate the chosen venv before running Molecule; activation
 exports the shared tooling path and collection path to the role's scenario.
 
