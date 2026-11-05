@@ -31,6 +31,17 @@ if [[ $1 == -m && $2 == venv ]]; then
   chmod +x "$destination/bin/python" "$destination/bin/ansible-galaxy"
 fi
 MOCK
+cat >"$tmp/bin/python3.12" <<'MOCK'
+#!/usr/bin/env bash
+if [[ $1 == -m && $2 == venv ]]; then
+  destination=${@: -1}
+  mkdir -p "$destination/bin"
+  printf '#!/usr/bin/env bash\n' >"$destination/bin/activate"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$destination/bin/python"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$destination/bin/ansible-galaxy"
+  chmod +x "$destination/bin/python" "$destination/bin/ansible-galaxy"
+fi
+MOCK
 cat >"$tmp/bin/python3.14" <<'MOCK'
 #!/usr/bin/env bash
 if [[ $1 == -m && $2 == venv ]]; then
@@ -49,20 +60,20 @@ MOCK
 chmod +x "$tmp/bin/"*
 for environment in ansible-min ansible-current ansible-next; do
   PATH="$tmp/bin:$PATH" "$fixture/scripts/setup-venv" "$environment" >/dev/null
-  expected=11.4.0
-  [[ $environment != ansible-min ]] || expected=10.7.3
+  expected=collections.yml
+  [[ $environment != ansible-min ]] || expected=collections-ansible-min.yml
   (
-    unset IDARSI_COMMUNITY_GENERAL_VERSION
+    unset IDARSI_MOLECULE_COLLECTIONS_FILE
     # shellcheck disable=SC1090
     source "$fixture/.venv/$environment/bin/activate"
     [[ $IDARSI_ANSIBLE_ENVIRONMENT == "$environment" ]]
-    [[ $IDARSI_COMMUNITY_GENERAL_VERSION == "$expected" ]]
+    [[ $IDARSI_MOLECULE_COLLECTIONS_FILE == "$expected" ]]
   )
   (
-    IDARSI_COMMUNITY_GENERAL_VERSION=user-value
+    IDARSI_MOLECULE_COLLECTIONS_FILE=user-value
     # shellcheck disable=SC1090
     source "$fixture/.venv/$environment/bin/activate"
-    [[ $IDARSI_COMMUNITY_GENERAL_VERSION == user-value ]]
+    [[ $IDARSI_MOLECULE_COLLECTIONS_FILE == user-value ]]
   )
 done
 printf 'Activation hook behavior checks passed.\n'

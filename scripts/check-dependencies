@@ -44,7 +44,7 @@ for environment in ansible-min ansible-current ansible-next; do
 
   for collection in ansible.posix containers.podman; do
     case "$collection" in
-      ansible.posix) version_key=ansible_posix ;;
+      ansible.posix) version_key="ansible_posix_$key" ;;
       containers.podman) version_key=containers_podman ;;
     esac
     expected=$(version_value collections "$version_key")
@@ -74,6 +74,14 @@ done
 # When checking from an active environment, ensure the pinned collections are
 # actually installed there (repository-only checks remain usable without one).
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  active_environment=${IDARSI_ANSIBLE_ENVIRONMENT:-${VIRTUAL_ENV##*/}}
+  case "$active_environment" in
+    ansible-min|ansible-current|ansible-next) ;;
+    *)
+      printf 'Cannot determine active Ansible environment from IDARSI_ANSIBLE_ENVIRONMENT or VIRTUAL_ENV; set IDARSI_ANSIBLE_ENVIRONMENT to ansible-min, ansible-current, or ansible-next.\n' >&2
+      exit 1
+      ;;
+  esac
   if ! config=$(ansible-config dump --format json); then
     printf 'Failed to read Ansible configuration with ansible-config.\n' >&2
     exit 1
@@ -117,7 +125,10 @@ PYCONFIG
   fi
   for collection in ansible.posix containers.podman; do
     case "$collection" in
-      ansible.posix) namespace=ansible; name=posix; version_key=ansible_posix ;;
+      ansible.posix)
+        namespace=ansible; name=posix
+        version_key="ansible_posix_${active_environment#ansible-}"
+        ;;
       containers.podman) namespace=containers; name=podman; version_key=containers_podman ;;
     esac
     expected=$(awk -F'"' -v key="$version_key" '$0 ~ "^  " key ":" {print $2; exit}' "$versions")

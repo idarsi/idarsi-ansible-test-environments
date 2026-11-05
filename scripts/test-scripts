@@ -7,6 +7,8 @@ for script in install.sh uninstall.sh verify-install-kvm.sh scripts/setup-host s
 done
 bash "$repo_root/tests/test-kvm-host-validation.sh"
 bash "$repo_root/tests/test-check-dependencies.sh"
+"$repo_root/tests/test-activation-hook.sh"
+grep -Fq 'IDARSI_MOLECULE_COLLECTIONS_FILE' "$repo_root/docs/role-integration.md"
 bash "$repo_root/tests/test-nested-kvm-capability.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 "$repo_root/scripts/test-nested-ipv4.py"
 "$repo_root/scripts/test-rhel-install-source"
