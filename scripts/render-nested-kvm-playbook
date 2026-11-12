@@ -35,6 +35,11 @@ output.write_text(
               path: "/tmp/nested-kvm-install.iso"
               kickstart: "/tmp/inner.ks"
               os_variant: "rocky9"
+            network:
+              ipv4:
+                address: "192.168.250.210/24"
+                gateway: "192.168.250.1"
+                nameservers: ["192.168.250.1"]
   roles:
     - role: /opt/idarsi-nested-kvm/role
 ''',

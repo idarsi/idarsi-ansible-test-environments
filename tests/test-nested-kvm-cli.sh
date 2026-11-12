@@ -35,6 +35,9 @@ grep -Fq '    kvm_network: "idarsi-test"' "$tmp/playbook.yml"
 grep -Fq '      kvm:' "$tmp/playbook.yml"
 grep -Fq '          - name: "inner-test"' "$tmp/playbook.yml"
 grep -Fq '            hostname: "nested-role-integration.example.test"' "$tmp/playbook.yml"
+grep -Fq '                address: "192.168.250.210/24"' "$tmp/playbook.yml"
+grep -Fq '                gateway: "192.168.250.1"' "$tmp/playbook.yml"
+grep -Fq '                nameservers: ["192.168.250.1"]' "$tmp/playbook.yml"
 cat >"$tmp/recap-bad.log" <<'EOF'
 changed=0 is just a message, not a recap
 PLAY RECAP *********************************************************************
@@ -58,7 +61,7 @@ run_line=$(grep -nF 'ansible-playbook' "$root/scripts/test-nested-kvm" | tail -n
   printf 'Expected a private playbook directory before transfer and execution of that exact path.\n' >&2
   exit 1
 }
-if grep -Fq '        network:' "$tmp/playbook.yml"; then
+if grep -Eq '^        network:' "$tmp/playbook.yml"; then
   echo 'The KVM network must be passed as a role variable, not blueprint data.' >&2
   exit 1
 fi
