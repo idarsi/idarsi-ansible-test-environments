@@ -6,7 +6,7 @@ if [[ ${IDARSI_RUN_NESTED_KVM_TEST:-} != 1 ]]; then
   printf 'SKIP: set IDARSI_RUN_NESTED_KVM_TEST=1 to opt in to the nested KVM integration test.\n'
   exit 0
 fi
-role_path=${KVM_NESTED_ROLE_PATH:-${IDARSI_KVM_ROLE_PATH:-/home/arsi/manage/roles/ansible-iac-roles-kvm}}
+role_path=${KVM_NESTED_ROLE_PATH:-${IDARSI_KVM_ROLE_PATH:-}}
 iso=
 while (($#)); do
   case $1 in
@@ -18,6 +18,7 @@ while (($#)); do
   esac
 done
 iso=${iso:-${IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10:-}}
+[[ -n $role_path ]] || { printf 'FAIL: provide the KVM role directory with --role-path or KVM_NESTED_ROLE_PATH.\n' >&2; exit 1; }
 role_path=$(cd "$role_path" 2>/dev/null && pwd) || { printf 'FAIL: KVM role directory is unavailable: %s\n' "$role_path" >&2; exit 1; }
 [[ -f $role_path/tasks/main.yml && -f $role_path/requirements.yml ]] || { printf 'FAIL: not an ansible-iac-roles-kvm role directory: %s\n' "$role_path" >&2; exit 1; }
 if [[ -z $iso || ! -r $iso || ! -f $iso ]]; then
@@ -127,7 +128,7 @@ ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserK
 python3 - "$work/playbook.yml" "$inner" <<'PY'
 from pathlib import Path
 import sys
-Path(sys.argv[1]).write_text('''---\n- name: Provision nested integration guest\n  hosts: localhost\n  connection: local\n  become: true\n  gather_facts: true\n  vars:\n    ansible_python_interpreter: /usr/bin/python3\n    ansible_collections_path: /opt/idarsi-nested-kvm/collections\n    iac_blueprint:\n      kvm:\n        instances:\n          - name: "''' + sys.argv[2] + '''"\n            hostname: "nested-role-integration.example.test"\n            memory_mb: 2048\n            vcpus: 2\n            disk_gb: 10\n            source:\n              type: "iso"\n              path: "/tmp/nested-kvm-install.iso"\n              kickstart: "/tmp/inner.ks"\n              os_variant: "rocky9"\n  roles:\n    - role: /opt/idarsi-nested-kvm/role\n''')
+Path(sys.argv[1]).write_text('''---\n- name: Provision nested integration guest\n  hosts: localhost\n  connection: local\n  become: true\n  gather_facts: true\n  vars:\n    ansible_python_interpreter: /usr/bin/python3\n    ansible_collections_path: /opt/idarsi-nested-kvm/collections\n    iac_blueprint:\n      kvm:\n        network: "idarsi-test"\n        instances:\n          - name: "''' + sys.argv[2] + '''"\n            hostname: "nested-role-integration.example.test"\n            memory_mb: 2048\n            vcpus: 2\n            disk_gb: 10\n            source:\n              type: "iso"\n              path: "/tmp/nested-kvm-install.iso"\n              kickstart: "/tmp/inner.ks"\n              os_variant: "rocky9"\n  roles:\n    - role: /opt/idarsi-nested-kvm/role\n''')
 PY
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook /tmp/playbook.yml"

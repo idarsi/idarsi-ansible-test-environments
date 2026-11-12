@@ -32,9 +32,11 @@ An explicit manual nested-KVM integration test is available on a capable KVM
 host (not part of regular tests). After `./install.sh kvm` and configuring the
 Rocky 10 ISO and the KVM role checkout, run
 `IDARSI_RUN_NESTED_KVM_TEST=1 scripts/test-nested-kvm` (or pass the ISO path).
-The role defaults to `/home/arsi/manage/roles/ansible-iac-roles-kvm`; override
-with `KVM_NESTED_ROLE_PATH=/path/to/ansible-iac-roles-kvm` or
-`--role-path /path/to/ansible-iac-roles-kvm` (also supports `--role-path=...`).
+Provide the role checkout with `KVM_NESTED_ROLE_PATH=/path/to/ansible-iac-roles-kvm`
+or `--role-path /path/to/ansible-iac-roles-kvm` (also supports
+`--role-path=...`); there is no machine-specific default. The generated guest
+blueprint selects the repository-created `idarsi-test` network, matching the
+Kickstart network and lease polling.
 It creates a uniquely named outer guest with host-passthrough CPU, installs this
 checkout's KVM host setup inside it, then runs the selected role on that outer
 guest to provision and install the inner Rocky guest. The outer test VM is

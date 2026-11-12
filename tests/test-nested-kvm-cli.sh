@@ -14,6 +14,12 @@ if IDARSI_RUN_NESTED_KVM_TEST=1 "$root/scripts/test-nested-kvm" --role-path >"$t
   exit 1
 fi
 grep -q -- '--role-path requires a directory' "$tmp/out"
+if IDARSI_RUN_NESTED_KVM_TEST=1 env -u KVM_NESTED_ROLE_PATH -u IDARSI_KVM_ROLE_PATH \
+  "$root/scripts/test-nested-kvm" "$tmp/missing.iso" >"$tmp/out" 2>&1; then
+  echo 'Expected missing default role path to fail.' >&2
+  exit 1
+fi
+grep -q 'provide the KVM role directory with --role-path or KVM_NESTED_ROLE_PATH' "$tmp/out"
 mkdir -p "$tmp/env-role/tasks"
 : >"$tmp/env-role/tasks/main.yml"
 : >"$tmp/env-role/requirements.yml"
