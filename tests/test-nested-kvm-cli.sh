@@ -86,7 +86,22 @@ if grep -Fq 'StrictHostKeyChecking=yes' "$root/scripts/test-nested-kvm"; then
   echo 'Nested guest SSH must not require keys from a discarded known_hosts file.' >&2
   exit 1
 fi
-grep -Fq 'StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "$root/scripts/test-nested-kvm"
+awk '
+  /ssh / && /inner_ed25519/ {
+    invocations++
+    if ($0 !~ /StrictHostKeyChecking=no/ || $0 !~ /UserKnownHostsFile=\/dev\/null/) {
+      printf "Inner-guest SSH invocation is missing required host-key options (line %d).\n", NR > "/dev/stderr"
+      failed = 1
+    }
+  }
+  END {
+    if (invocations == 0) {
+      print "Expected to find inner-guest SSH invocations." > "/dev/stderr"
+      failed = 1
+    }
+    exit failed
+  }
+' "$root/scripts/test-nested-kvm"
 if grep -F "sudo systemctl reboot'\" >/dev/null 2>&1 || true" "$root/scripts/test-nested-kvm"; then
   echo 'Reboot command must not mask failed reboot/SSH status.' >&2
   exit 1
