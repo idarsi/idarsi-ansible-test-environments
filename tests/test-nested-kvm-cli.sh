@@ -82,6 +82,11 @@ grep -Fq 'nmcli connection modify' "$root/scripts/test-nested-kvm"
 grep -Fq 'source_boot_id=$(ssh' "$root/scripts/test-nested-kvm"
 grep -Fq 'source_new_boot_id == "$source_boot_id"' "$root/scripts/test-nested-kvm"
 grep -Fq 'reboot_status == 255' "$root/scripts/test-nested-kvm"
+if grep -Fq 'StrictHostKeyChecking=yes' "$root/scripts/test-nested-kvm"; then
+  echo 'Nested guest SSH must not require keys from a discarded known_hosts file.' >&2
+  exit 1
+fi
+grep -Fq 'StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "$root/scripts/test-nested-kvm"
 if grep -F "sudo systemctl reboot'\" >/dev/null 2>&1 || true" "$root/scripts/test-nested-kvm"; then
   echo 'Reboot command must not mask failed reboot/SSH status.' >&2
   exit 1
