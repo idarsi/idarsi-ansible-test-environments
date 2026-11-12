@@ -2,13 +2,19 @@
 """Render the playbook used to provision a nested KVM integration guest."""
 
 from pathlib import Path
+import json
 import sys
 
-if len(sys.argv) != 3:
-    raise SystemExit("Usage: render-nested-kvm-playbook OUTPUT INNER_VM_NAME")
+if len(sys.argv) not in (3, 4):
+    raise SystemExit("Usage: render-nested-kvm-playbook OUTPUT VM_NAME [IMAGE_PATH]")
 
 output = Path(sys.argv[1])
-inner_vm_name = sys.argv[2]
+vm_name = json.dumps(sys.argv[2])
+source = (
+    f'''              type: "image"\n              path: {json.dumps(sys.argv[3])}\n'''
+    if len(sys.argv) == 4
+    else '''              type: "iso"\n              path: "/tmp/nested-kvm-install.iso"\n              kickstart: "/tmp/inner.ks"\n              os_variant: "rocky9"\n'''
+)
 output.write_text(
     '''---
 - name: Provision nested integration guest
@@ -23,19 +29,17 @@ output.write_text(
     iac_blueprint:
       kvm:
         instances:
-          - name: "'''
-    + inner_vm_name
-    + '''"
+          - name: '''
+    + vm_name
+    + '''
             hostname: "nested-role-integration.example.test"
             memory_mb: 2048
             vcpus: 2
             disk_gb: 10
             source:
-              type: "iso"
-              path: "/tmp/nested-kvm-install.iso"
-              kickstart: "/tmp/inner.ks"
-              os_variant: "rocky9"
-            network:
+'''
+    + source
+    + '''            network:
               ipv4:
                 address: "192.168.250.210/24"
                 gateway: "192.168.250.1"

@@ -39,7 +39,15 @@ blueprint selects the repository-created `idarsi-test` network, matching the
 Kickstart network and lease polling.
 It creates a uniquely named outer guest with host-passthrough CPU, installs this
 checkout's KVM host setup inside it, then runs the selected role on that outer
-guest to provision and install the inner Rocky guest. The outer test VM is
+guest to provision and install the inner Rocky guest from ISO. After checking
+the ISO guest's Rocky OS, hostname, static address, SSH access, and second-run
+idempotence, the harness gracefully shuts it down and preserves its qcow2 disk.
+It then provisions a uniquely named clone using `source.type: image` and that
+disk, checks image provisioning and second-run idempotence, and verifies the
+clone boots Rocky and accepts SSH at the same static address. The source guest
+stays shut off while the clone uses `.210`. This image-source extension is
+designed coverage and is pending runtime verification; it does not yet add
+verified test evidence. The outer test VM is
 created only by manual harness invocation; the role is not run on the physical
 host and cannot create a host-side role-managed VM. Role files are transferred
 as a filtered tar archive without `.git`, tests, secret/credential-named files,

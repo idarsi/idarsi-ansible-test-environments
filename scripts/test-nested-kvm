@@ -47,7 +47,7 @@ cleanup() {
   local status=$?
   trap - EXIT INT TERM
   if ((status != 0)); then
-    for log in "$work"/ansible-run-*.log; do
+    for log in "$work"/*ansible-run-*.log; do
       [[ -f $log ]] || continue
       printf '\n--- %s ---\n' "${log##*/}" >&2
       cat "$log" >&2
@@ -55,7 +55,7 @@ cleanup() {
   fi
   if [[ -n ${address:-} ]]; then
     ssh -F /dev/null -i "$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      "molecule@$address" "sudo virsh destroy 'inner-$hash' >/dev/null 2>&1 || true; sudo virsh undefine 'inner-$hash' --remove-all-storage >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+      "molecule@$address" "for name in 'inner-$hash' 'image-$hash'; do sudo virsh destroy \"\$name\" >/dev/null 2>&1 || true; sudo virsh undefine \"\$name\" --remove-all-storage >/dev/null 2>&1 || true; done" >/dev/null 2>&1 || true
   fi
   # The inner VM and its disk exist only inside this uniquely owned outer VM.
   # Destroying the outer VM on the host is the ultimate cleanup, even if SSH fails.
@@ -149,4 +149,31 @@ hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=
 guest_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -Fx '192.168.250.210')
 [[ $guest_ipv4 == 192.168.250.210 ]] || { printf 'FAIL: inner guest does not have expected static IPv4 address.\n' >&2; exit 1; }
-printf 'PASS: role %s provisioned guest %s and Rocky Linux was installed.\n' "$role_path" "$inner"
+# Preserve the verified ISO-installed disk as the image source, and stop its
+# static-IP guest before booting the clone on the same address.
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh shutdown '$inner'"
+for ((i=0; i<120; i++)); do
+  state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" | tr -d '\r')
+  [[ $state == 'shut off' ]] && break
+  sleep 2
+done
+[[ $state == 'shut off' ]] || { printf 'FAIL: ISO source guest did not shut down gracefully.\n' >&2; exit 1; }
+image_vm="image-$hash"
+source_disk="/var/lib/libvirt/images/$inner.qcow2"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "test -f '$source_disk' && sudo qemu-img check -f qcow2 '$source_disk'"
+python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/image-playbook.yml" "$image_vm" "$source_disk"
+scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/image-playbook.yml" "molecule@$address:$playbook_dir/image-playbook.yml"
+for run in 1 2; do
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook '$playbook_dir/image-playbook.yml'" \
+    2>&1 | tee "$work/image-ansible-run-$run.log"
+  if ((run == 2)); then "$repo_root/scripts/check-nested-kvm-idempotence" "$work/image-ansible-run-$run.log"; fi
+done
+for ((i=0; i<360; i++)); do
+  if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo virsh dominfo '$image_vm' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'" >/dev/null 2>&1; then break; fi
+  sleep 5
+done
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$image_vm' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
+printf 'PASS: role %s provisioned ISO guest %s and image clone %s; both booted Rocky Linux.\n' "$role_path" "$inner" "$image_vm"

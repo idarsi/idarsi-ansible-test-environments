@@ -38,6 +38,22 @@ grep -Fq '            hostname: "nested-role-integration.example.test"' "$tmp/pl
 grep -Fq '                address: "192.168.250.210/24"' "$tmp/playbook.yml"
 grep -Fq '                gateway: "192.168.250.1"' "$tmp/playbook.yml"
 grep -Fq '                nameservers: ["192.168.250.1"]' "$tmp/playbook.yml"
+"$root/scripts/render-nested-kvm-playbook" "$tmp/image-playbook.yml" image-test '/var/lib/libvirt/images/inner-test.qcow2'
+grep -Fq '          - name: "image-test"' "$tmp/image-playbook.yml"
+grep -Fq '              type: "image"' "$tmp/image-playbook.yml"
+grep -Fq '              path: "/var/lib/libvirt/images/inner-test.qcow2"' "$tmp/image-playbook.yml"
+! grep -Fq 'kickstart:' "$tmp/image-playbook.yml"
+python3 - "$tmp/image-playbook.yml" <<'PY'
+import sys
+try:
+    import yaml
+except ImportError as error:
+    raise SystemExit(f"PyYAML is required for the render/parser test: {error}")
+with open(sys.argv[1], encoding="utf-8") as stream:
+    playbook = yaml.safe_load(stream)
+source = playbook[0]["vars"]["iac_blueprint"]["kvm"]["instances"][0]["source"]
+assert source == {"type": "image", "path": "/var/lib/libvirt/images/inner-test.qcow2"}
+PY
 cat >"$tmp/recap-bad.log" <<'EOF'
 changed=0 is just a message, not a recap
 PLAY RECAP *********************************************************************
@@ -53,7 +69,7 @@ localhost : ok=2 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
 EOF
 "$root/scripts/check-nested-kvm-idempotence" "$tmp/recap-good.log"
 grep -Fq "hostnamectl --static" "$root/scripts/test-nested-kvm"
-render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | tail -n1 | cut -d: -f1)
+render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | head -n1 | cut -d: -f1)
 mkdir_line=$(grep -nF 'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX")' "$root/scripts/test-nested-kvm" | cut -d: -f1)
 transfer_line=$(grep -nF '"$work/playbook.yml" "molecule@$address:$playbook_dir/playbook.yml"' "$root/scripts/test-nested-kvm" | cut -d: -f1)
 run_line=$(grep -nF 'ansible-playbook' "$root/scripts/test-nested-kvm" | tail -n1 | cut -d: -f1)
