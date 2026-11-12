@@ -34,6 +34,13 @@ IDARSI_RUN_NESTED_KVM_TEST=0 "$root/scripts/test-nested-kvm" --help >/dev/null
 grep -Fq '    kvm_network: "idarsi-test"' "$tmp/playbook.yml"
 grep -Fq '      kvm:' "$tmp/playbook.yml"
 grep -Fq '          - name: "inner-test"' "$tmp/playbook.yml"
+render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | tail -n1 | cut -d: -f1)
+transfer_line=$(grep -nF '"$work/playbook.yml" "molecule@$address:/tmp/playbook.yml"' "$root/scripts/test-nested-kvm" | cut -d: -f1)
+run_line=$(grep -nF 'ansible-playbook /tmp/playbook.yml' "$root/scripts/test-nested-kvm" | cut -d: -f1)
+[[ -n $transfer_line && $render_line -lt $transfer_line && $transfer_line -lt $run_line ]] || {
+  printf 'Expected the rendered playbook to be transferred before ansible-playbook runs.\n' >&2
+  exit 1
+}
 if grep -Fq '        network:' "$tmp/playbook.yml"; then
   echo 'The KVM network must be passed as a role variable, not blueprint data.' >&2
   exit 1
