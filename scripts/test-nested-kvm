@@ -126,10 +126,12 @@ ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserK
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "sudo dnf install -y ansible-core lorax && sudo install -d -m 755 /opt/idarsi-nested-kvm/role /opt/idarsi-nested-kvm/collections && sudo tar -xzf /tmp/kvm-role.tgz -C /opt/idarsi-nested-kvm/role && sudo chown -R molecule:molecule /opt/idarsi-nested-kvm && ansible-galaxy collection install -r /opt/idarsi-nested-kvm/role/requirements.yml -p /opt/idarsi-nested-kvm/collections"
 python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/playbook.yml" "$inner"
+playbook_dir=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX") && chmod 0700 "$dir" && printf "%s" "$dir"')
 scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-  "$work/playbook.yml" "molecule@$address:/tmp/playbook.yml"
+  "$work/playbook.yml" "molecule@$address:$playbook_dir/playbook.yml"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook /tmp/playbook.yml"
+  "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook '$playbook_dir/playbook.yml'"
 if [[ -z ${KVM_NESTED_INNER_IPV4_ADDRESS:-} ]]; then
   inner_address=
 fi

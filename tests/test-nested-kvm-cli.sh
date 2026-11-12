@@ -35,10 +35,11 @@ grep -Fq '    kvm_network: "idarsi-test"' "$tmp/playbook.yml"
 grep -Fq '      kvm:' "$tmp/playbook.yml"
 grep -Fq '          - name: "inner-test"' "$tmp/playbook.yml"
 render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | tail -n1 | cut -d: -f1)
-transfer_line=$(grep -nF '"$work/playbook.yml" "molecule@$address:/tmp/playbook.yml"' "$root/scripts/test-nested-kvm" | cut -d: -f1)
-run_line=$(grep -nF 'ansible-playbook /tmp/playbook.yml' "$root/scripts/test-nested-kvm" | cut -d: -f1)
-[[ -n $transfer_line && $render_line -lt $transfer_line && $transfer_line -lt $run_line ]] || {
-  printf 'Expected the rendered playbook to be transferred before ansible-playbook runs.\n' >&2
+mkdir_line=$(grep -nF 'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX")' "$root/scripts/test-nested-kvm" | cut -d: -f1)
+transfer_line=$(grep -nF '"$work/playbook.yml" "molecule@$address:$playbook_dir/playbook.yml"' "$root/scripts/test-nested-kvm" | cut -d: -f1)
+run_line=$(grep -nF 'ansible-playbook' "$root/scripts/test-nested-kvm" | tail -n1 | cut -d: -f1)
+[[ -n $mkdir_line && $mkdir_line -lt $transfer_line && $render_line -lt $transfer_line && $transfer_line -lt $run_line ]] || {
+  printf 'Expected a private playbook directory before transfer and execution of that exact path.\n' >&2
   exit 1
 }
 if grep -Fq '        network:' "$tmp/playbook.yml"; then
