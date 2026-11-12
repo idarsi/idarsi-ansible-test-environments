@@ -184,3 +184,14 @@ path. The serial console output is saved under
 `/tmp/idarsi-ansible-test-environments/kvm-logs/`; the console pane prints its
 path. Both log types older than seven days are removed at the next run. Run one
 KVM smoke test at a time so the new guest can be identified unambiguously.
+### Imported qcow2 guests
+
+Platforms may use `image_path` instead of ISO `install_source`/`kickstart`.
+The source must be a readable qcow2 image with an existing `KVM_SSH_USER`
+account and DHCP-capable NetworkManager networking (default user: `molecule`).
+The launcher validates the source, creates an owned copy-on-write overlay in
+the managed base directory, customizes only that overlay (hostname and SSH
+public key), and boots it with `virt-install --import`. The source image is
+never modified or removed. Do not combine `image_path` with a nonempty
+`install_source`. This import path is opt-in/manual; it does not replace ISO
+installation coverage.

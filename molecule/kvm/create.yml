@@ -16,16 +16,18 @@
           - molecule_config.platforms | length > 0
           - test_environment | length > 0
 
+    - name: Reject platforms that combine image and ISO installation inputs
+      ansible.builtin.assert:
+        that:
+          - not (item.image_path is defined and item.install_source is defined and (item.install_source | string | length > 0))
+        fail_msg: "Platform {{ item.name }} must use either image_path or install_source, not both."
+      loop: "{{ molecule_config.platforms }}"
+
     - name: Provision all configured guests
       block:
         - name: Create VM and wait for SSH
           ansible.builtin.command:
-            argv:
-              - "{{ test_environment }}/scripts/kvm-vm"
-              - create
-              - "{{ item.name }}"
-              - "{{ item.install_source | default('') }}"
-              - "{{ item.kickstart if item.kickstart.startswith('/') else molecule_scenario_directory ~ '/' ~ item.kickstart }}"
+            argv: "{{ [test_environment ~ '/scripts/kvm-vm', 'create-image', item.name, item.image_path] if item.image_path is defined else [test_environment ~ '/scripts/kvm-vm', 'create', item.name, item.install_source | default(''), item.kickstart if item.kickstart.startswith('/') else molecule_scenario_directory ~ '/' ~ item.kickstart] }}"
           environment:
             MOLECULE_EPHEMERAL_DIRECTORY: "{{ molecule_ephemeral_directory }}"
             MOLECULE_SCENARIO_DIRECTORY: "{{ molecule_scenario_directory }}"
