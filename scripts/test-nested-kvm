@@ -142,10 +142,7 @@ for run in 1 2; do
     "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook '$playbook_dir/playbook.yml'" \
     2>&1 | tee "$work/ansible-run-$run.log"
   if ((run == 2)); then
-    grep -Eq 'changed=0([[:space:]]|$)' "$work/ansible-run-$run.log" || {
-      printf 'FAIL: second playbook run did not report changed=0.\n' >&2
-      exit 1
-    }
+    "$repo_root/scripts/check-nested-kvm-idempotence" "$work/ansible-run-$run.log"
   fi
 done
 if [[ -z ${KVM_NESTED_INNER_IPV4_ADDRESS:-} ]]; then

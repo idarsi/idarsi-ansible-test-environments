@@ -35,7 +35,20 @@ grep -Fq '    kvm_network: "idarsi-test"' "$tmp/playbook.yml"
 grep -Fq '      kvm:' "$tmp/playbook.yml"
 grep -Fq '          - name: "inner-test"' "$tmp/playbook.yml"
 grep -Fq '            hostname: "nested-role-integration.example.test"' "$tmp/playbook.yml"
-grep -Fq "grep -Eq 'changed=0([[:space:]]|\$)'" "$root/scripts/test-nested-kvm"
+cat >"$tmp/recap-bad.log" <<'EOF'
+changed=0 is just a message, not a recap
+PLAY RECAP *********************************************************************
+localhost : ok=2 changed=1 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
+EOF
+if "$root/scripts/check-nested-kvm-idempotence" "$tmp/recap-bad.log" >"$tmp/out" 2>&1; then
+  echo 'Expected a non-idempotent localhost recap to fail despite a fake changed=0 message.' >&2
+  exit 1
+fi
+cat >"$tmp/recap-good.log" <<'EOF'
+PLAY RECAP *********************************************************************
+localhost : ok=2 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
+EOF
+"$root/scripts/check-nested-kvm-idempotence" "$tmp/recap-good.log"
 grep -Fq "hostnamectl --static" "$root/scripts/test-nested-kvm"
 render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | tail -n1 | cut -d: -f1)
 mkdir_line=$(grep -nF 'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX")' "$root/scripts/test-nested-kvm" | cut -d: -f1)
