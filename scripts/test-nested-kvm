@@ -120,7 +120,7 @@ scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/de
 # local secrets, or developer configuration. Dependencies are resolved in a
 # private path on the outer guest.
 tar -C "$role_path" --exclude=.git --exclude=.env --exclude='*secret*' --exclude='*credential*' \
-  -czf "$work/kvm-role.tgz" defaults tasks templates requirements.yml
+  -czf "$work/kvm-role.tgz" defaults filter_plugins tasks templates requirements.yml
 scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/kvm-role.tgz" "molecule@$address:/tmp/kvm-role.tgz"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "install -d -m 700 \"\$HOME/.ssh/nested-kvm\" && install -m 600 /tmp/inner_ed25519 \"\$HOME/.ssh/nested-kvm/inner_ed25519\" && install -m 644 /tmp/inner_ed25519.pub \"\$HOME/.ssh/nested-kvm/inner_ed25519.pub\" && rm -f /tmp/inner_ed25519 /tmp/inner_ed25519.pub"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
