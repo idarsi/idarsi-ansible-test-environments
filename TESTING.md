@@ -49,16 +49,20 @@ and requires a DHCP lease matching the source NIC MAC plus SSH before gracefully
 shutting down and preserving that qcow2 disk.
 It then provisions a uniquely named clone using `source.type: image` and that
 preconfigured disk, checks importing/booting the image and second-run
-idempotence, and verifies the clone has a lease matching its libvirt NIC MAC,
-accepts SSH, boots Rocky, retains the inherited hostname, and has the leased
-IPv4 address. On failure, the harness prints libvirt domain, interface, and
+idempotence (`changed=0`), and verifies the clone has a lease matching its
+libvirt NIC MAC, accepts SSH, boots Rocky, retains the inherited hostname, and
+has the leased IPv4 address. This nested image-source integration test passed:
+the ISO guest was converted from static networking to DHCP and rebooted
+successfully, then its qcow2 disk was imported and booted as a clone with the
+checks above. On failure, the harness prints libvirt domain, interface, and
 lease diagnostics before cleanup. The image
-path tests importing and booting a preconfigured ISO-installed image, not image
-customization; its blueprint omits network configuration because the image
-already carries its hostname and a DHCP profile. The source guest stays shut
-off while the clone obtains its own lease on `idarsi-test`. This image-source extension is
-designed coverage and is pending runtime verification; it does not yet add
-verified test evidence. The outer test VM is
+path tests importing and booting a preconfigured ISO-installed Rocky image, not
+arbitrary external/cloud image customization; its blueprint omits network
+configuration because the image already carries its hostname and a DHCP
+profile. The source guest stays shut off while the clone obtains its own lease
+on `idarsi-test`. This manual run is runtime evidence for this nested host and
+Rocky image workflow, not a general claim that arbitrary qcow2 images can be
+customized. The outer test VM is
 created only by manual harness invocation; the role is not run on the physical
 host and cannot create a host-side role-managed VM. Role files are transferred
 as a filtered tar archive without `.git`, tests, secret/credential-named files,
