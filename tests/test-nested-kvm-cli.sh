@@ -3,6 +3,25 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
+cat >"$tmp/domiflist" <<'EOF'
+Interface  Type      Source       Model    MAC
+-------------------------------------------------------
+vnet0      network   default      virtio   52:54:00:ab:cd:ef
+vnet1      bridge   br-test      virtio   52:54:00:11:22:33
+EOF
+expected_mac=52:54:00:ab:cd:ef
+[[ $(awk '$2 == "network" && $5 ~ /^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$/ {print tolower($5); exit}' <"$tmp/domiflist") == "$expected_mac" ]] || {
+  echo 'Source domiflist MAC parser selected an incorrect MAC.' >&2
+  exit 1
+}
+[[ $(awk '$2 == "network" && $5 ~ /^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$/ {print tolower($5); exit}' <"$tmp/domiflist") == "$expected_mac" ]] || {
+  echo 'Clone domiflist MAC parser selected an incorrect MAC.' >&2
+  exit 1
+}
+if printf 'Interface Type Source Model MAC\nvnet0 network default virtio invalid\n' | awk '$2 == "network" && $5 ~ /^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$/ {print tolower($5); exit}' | grep -q .; then
+  echo 'Domiflist MAC parser accepted an invalid MAC.' >&2
+  exit 1
+fi
 mkdir "$tmp/role"
 if IDARSI_RUN_NESTED_KVM_TEST=1 "$root/scripts/test-nested-kvm" --role-path "$tmp/role" "$tmp/missing.iso" >"$tmp/out" 2>&1; then
   echo 'Expected invalid role path to fail.' >&2
