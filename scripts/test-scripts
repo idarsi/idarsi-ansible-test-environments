@@ -8,6 +8,7 @@ done
 bash "$repo_root/tests/test-kvm-host-validation.sh"
 bash "$repo_root/tests/test-check-dependencies.sh"
 bash "$repo_root/tests/test-nested-kvm-capability.sh"
+bash "$repo_root/tests/test-nested-kvm-cli.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 "$repo_root/scripts/test-nested-ipv4.py"
 "$repo_root/scripts/test-rhel-install-source"
 printf 'Shell syntax checks passed.\n'

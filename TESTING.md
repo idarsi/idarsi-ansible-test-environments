@@ -30,9 +30,19 @@ Molecule scenarios.
 
 An explicit manual nested-KVM integration test is available on a capable KVM
 host (not part of regular tests). After `./install.sh kvm` and configuring the
-Rocky 10 ISO, run `IDARSI_RUN_NESTED_KVM_TEST=1 scripts/test-nested-kvm` (or
-pass the ISO path). It creates a uniquely named outer guest with host-passthrough
-CPU, installs this checkout's KVM setup inside it, and boots an inner guest.
+Rocky 10 ISO and the KVM role checkout, run
+`IDARSI_RUN_NESTED_KVM_TEST=1 scripts/test-nested-kvm` (or pass the ISO path).
+The role defaults to `/home/arsi/manage/roles/ansible-iac-roles-kvm`; override
+with `KVM_NESTED_ROLE_PATH=/path/to/ansible-iac-roles-kvm` or
+`--role-path /path/to/ansible-iac-roles-kvm` (also supports `--role-path=...`).
+It creates a uniquely named outer guest with host-passthrough CPU, installs this
+checkout's KVM host setup inside it, then runs the selected role on that outer
+guest to provision and install the inner Rocky guest. The outer test VM is
+created only by manual harness invocation; the role is not run on the physical
+host and cannot create a host-side role-managed VM. Role files are transferred
+as a filtered tar archive without `.git`, tests, secret/credential-named files,
+or local configuration. Ansible Core, Lorax, and the role's pinned collection
+requirements are installed/resolved on the disposable outer guest only.
 Missing nested virtualization support is reported as `SKIP`; once opted in,
 missing prerequisites or test failures are `FAIL`.
 The prerequisite check requires readable CPU flags exposing `vmx` with an
@@ -56,10 +66,12 @@ nameserver `192.168.250.1` by default). Static inner addresses must be usable
 members of `192.168.250.0/24` outside the DHCP pool `.100-.199`; gateway and
 nameserver must also be usable members of that subnet. Run
 `python3 scripts/test-nested-ipv4.py` for focused, VM-free validation coverage.
-The test transfers only `config/idarsi-test-network.xml`, `scripts/setup-host`,
-and `scripts/kvm-base-dir` to the outer guest (not repository inventory, SSH
-keys, or local configuration). It installs the KVM host automation directly,
-without invoking the general-purpose `install.sh kvm` image-cache preparation.
+The harness transfers only `config/idarsi-test-network.xml`, `scripts/setup-host`,
+`scripts/kvm-base-dir`, and the role's `defaults`, `tasks`, `templates`, and
+`requirements.yml` (not repository inventory, SSH keys, Git metadata, or local
+configuration). It installs host automation directly, without invoking the
+general-purpose `install.sh kvm` image-cache preparation. Run
+`bash tests/test-nested-kvm-cli.sh` for VM-free role-path CLI coverage.
 The inner-guest SSH private key is stored mode `0600` under the `molecule`
 user's home directory; optional static inner IPv4 settings must satisfy the
 subnet and DHCP-pool constraints above.

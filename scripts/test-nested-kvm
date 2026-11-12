@@ -6,7 +6,20 @@ if [[ ${IDARSI_RUN_NESTED_KVM_TEST:-} != 1 ]]; then
   printf 'SKIP: set IDARSI_RUN_NESTED_KVM_TEST=1 to opt in to the nested KVM integration test.\n'
   exit 0
 fi
-iso=${1:-${IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10:-}}
+role_path=${KVM_NESTED_ROLE_PATH:-${IDARSI_KVM_ROLE_PATH:-/home/arsi/manage/roles/ansible-iac-roles-kvm}}
+iso=
+while (($#)); do
+  case $1 in
+    --role-path) (($# >= 2)) || { echo 'FAIL: --role-path requires a directory.' >&2; exit 1; }; role_path=$2; shift 2 ;;
+    --role-path=*) role_path=${1#*=}; shift ;;
+    --help) echo 'Usage: test-nested-kvm [ISO] [--role-path ROLE_DIRECTORY]'; exit 0 ;;
+    -*) echo "FAIL: unknown option: $1" >&2; exit 2 ;;
+    *) [[ -z $iso ]] || { echo 'FAIL: only one ISO path may be provided.' >&2; exit 2; }; iso=$1; shift ;;
+  esac
+done
+iso=${iso:-${IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10:-}}
+role_path=$(cd "$role_path" 2>/dev/null && pwd) || { printf 'FAIL: KVM role directory is unavailable: %s\n' "$role_path" >&2; exit 1; }
+[[ -f $role_path/tasks/main.yml && -f $role_path/requirements.yml ]] || { printf 'FAIL: not an ansible-iac-roles-kvm role directory: %s\n' "$role_path" >&2; exit 1; }
 if [[ -z $iso || ! -r $iso || ! -f $iso ]]; then
   printf 'FAIL: provide a readable Rocky 10 install ISO as argument or IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10.\n' >&2
   exit 1
@@ -60,11 +73,11 @@ result=$("$repo_root/scripts/kvm-vm" create "$outer" "$iso" "$repo_root/examples
 address=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["address"])' "$result")
 key="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"
 
-# Install this checkout's KVM host setup in the outer guest, then prove KVM by
-# launching an inner guest with the same trusted installation ISO.
+# Install this checkout's KVM host setup in the outer guest, then run the
+# selected KVM role there to provision the inner guest.
 # Transfer only the files needed to install and exercise this checkout. This
 # intentionally excludes inventory, SSH material, local configuration, and Git metadata.
-  tar -C "$repo_root" -czf "$work/repo.tgz" \
+tar -C "$repo_root" -czf "$work/repo.tgz" \
   config/idarsi-test-network.xml scripts/setup-host scripts/kvm-base-dir
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   "molecule@$address" 'mkdir -p ~/nested-kvm-repo'
@@ -102,9 +115,22 @@ chmod 600 "$work/inner.ks"
 inner_address=${KVM_NESTED_INNER_IPV4_ADDRESS:-}
 scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/inner.ks" "molecule@$address:/tmp/inner.ks"
 scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$inner_key" "$inner_key.pub" "molecule@$address:/tmp/"
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-  "molecule@$address" "sudo virt-host-validate qemu && grep -Eq '(vmx|svm)' /proc/cpuinfo && sudo virt-install --connect qemu:///system --name '$inner' --memory 2048 --vcpus 2 --disk size=10 --network network=idarsi-test,model=virtio --os-variant rocky9 --location /tmp/nested-kvm-install.iso --initrd-inject /tmp/inner.ks --extra-args 'inst.ks=file:/inner.ks console=ttyS0,115200n8' --graphics none --noautoconsole --wait 360"
+# Transfer only executable role content; never include VCS metadata, tests,
+# local secrets, or developer configuration. Dependencies are resolved in a
+# private path on the outer guest.
+tar -C "$role_path" --exclude=.git --exclude=.env --exclude='*secret*' --exclude='*credential*' \
+  -czf "$work/kvm-role.tgz" defaults tasks templates requirements.yml
+scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/kvm-role.tgz" "molecule@$address:/tmp/kvm-role.tgz"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "install -d -m 700 \"\$HOME/.ssh/nested-kvm\" && install -m 600 /tmp/inner_ed25519 \"\$HOME/.ssh/nested-kvm/inner_ed25519\" && install -m 644 /tmp/inner_ed25519.pub \"\$HOME/.ssh/nested-kvm/inner_ed25519.pub\" && rm -f /tmp/inner_ed25519 /tmp/inner_ed25519.pub"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo dnf install -y ansible-core lorax && sudo install -d -m 755 /opt/idarsi-nested-kvm/role /opt/idarsi-nested-kvm/collections && sudo tar -xzf /tmp/kvm-role.tgz -C /opt/idarsi-nested-kvm/role && sudo chown -R molecule:molecule /opt/idarsi-nested-kvm && ansible-galaxy collection install -r /opt/idarsi-nested-kvm/role/requirements.yml -p /opt/idarsi-nested-kvm/collections"
+python3 - "$work/playbook.yml" "$inner" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_text('''---\n- name: Provision nested integration guest\n  hosts: localhost\n  connection: local\n  become: true\n  gather_facts: true\n  vars:\n    ansible_python_interpreter: /usr/bin/python3\n    ansible_collections_path: /opt/idarsi-nested-kvm/collections\n    iac_blueprint:\n      kvm:\n        instances:\n          - name: "''' + sys.argv[2] + '''"\n            hostname: "nested-role-integration.example.test"\n            memory_mb: 2048\n            vcpus: 2\n            disk_gb: 10\n            source:\n              type: "iso"\n              path: "/tmp/nested-kvm-install.iso"\n              kickstart: "/tmp/inner.ks"\n              os_variant: "rocky9"\n  roles:\n    - role: /opt/idarsi-nested-kvm/role\n''')
+PY
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook /tmp/playbook.yml"
 if [[ -z ${KVM_NESTED_INNER_IPV4_ADDRESS:-} ]]; then
   inner_address=
 fi
@@ -113,8 +139,9 @@ for ((i=0; i<360; i++)); do
     inner_address=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domifaddr '$inner' --source lease --full 2>/dev/null | awk '\$3 == \"ipv4\" {sub(/\\/.*/, \"\", \$4); print \$4; exit}'" 2>/dev/null || true)
   fi
   [[ -n $inner_address ]] || { sleep 5; continue; }
-  if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'" >/dev/null 2>&1; then break; fi
+  if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'" >/dev/null 2>&1; then break; fi
   sleep 5
 done
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
-printf 'PASS: outer guest installed this repository KVM setup and booted an inner guest.\n'
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
+printf 'PASS: role %s provisioned guest %s and Rocky Linux was installed.\n' "$role_path" "$inner"

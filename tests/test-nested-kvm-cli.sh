@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf -- "$tmp"' EXIT
+mkdir "$tmp/role"
+if IDARSI_RUN_NESTED_KVM_TEST=1 "$root/scripts/test-nested-kvm" --role-path "$tmp/role" "$tmp/missing.iso" >"$tmp/out" 2>&1; then
+  echo 'Expected invalid role path to fail.' >&2
+  exit 1
+fi
+grep -q 'not an ansible-iac-roles-kvm role directory' "$tmp/out"
+if IDARSI_RUN_NESTED_KVM_TEST=1 "$root/scripts/test-nested-kvm" --role-path >"$tmp/out" 2>&1; then
+  echo 'Expected missing --role-path value to fail.' >&2
+  exit 1
+fi
+grep -q -- '--role-path requires a directory' "$tmp/out"
+mkdir -p "$tmp/env-role/tasks"
+: >"$tmp/env-role/tasks/main.yml"
+: >"$tmp/env-role/requirements.yml"
+if IDARSI_RUN_NESTED_KVM_TEST=1 KVM_NESTED_ROLE_PATH="$tmp/env-role" \
+  "$root/scripts/test-nested-kvm" "$tmp/missing.iso" >"$tmp/out" 2>&1; then
+  echo 'Expected missing ISO to fail after accepting the environment role path.' >&2
+  exit 1
+fi
+grep -q 'provide a readable Rocky 10 install ISO' "$tmp/out"
+IDARSI_RUN_NESTED_KVM_TEST=0 "$root/scripts/test-nested-kvm" --help >/dev/null
+printf 'Nested KVM role-path CLI checks passed.\n'
