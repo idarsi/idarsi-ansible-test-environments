@@ -41,11 +41,12 @@ It creates a uniquely named outer guest with host-passthrough CPU, installs this
 checkout's KVM host setup inside it, then runs the selected role on that outer
 guest to provision and install the inner Rocky guest from ISO. After checking
 the ISO guest's Rocky OS, hostname, static address, SSH access, and second-run
-idempotence, the harness records the active NetworkManager connection UUID,
-converts that profile from static addressing to DHCP, reboots (tolerating the
-expected SSH disconnect), and confirms a lease matching the source NIC MAC via
-`virsh domifaddr --source lease` plus SSH. It then gracefully shuts down and
-preserves that qcow2 disk.
+idempotence, the harness discovers and validates the active NetworkManager
+profile UUID and NIC device name, disables autoconnect on the static profile,
+and adds an autoconnecting DHCP profile bound to that NIC (`ipv4.method=auto`,
+`ipv6.method=disabled`). It reboots (tolerating the expected SSH disconnect)
+and requires a DHCP lease matching the source NIC MAC plus SSH before gracefully
+shutting down and preserving that qcow2 disk.
 It then provisions a uniquely named clone using `source.type: image` and that
 preconfigured disk, checks importing/booting the image and second-run
 idempotence, and verifies the clone has a lease matching its libvirt NIC MAC,

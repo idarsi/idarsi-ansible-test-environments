@@ -167,13 +167,15 @@ hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=
 guest_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -Fx '192.168.250.210')
 [[ $guest_ipv4 == 192.168.250.210 ]] || { printf 'FAIL: inner guest does not have expected static IPv4 address.\n' >&2; exit 1; }
-# Convert the verified ISO guest's active profile to DHCP before cloning. A
-# Kickstart static profile can be tied to the source NIC identity.
-connection_uuid=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'nmcli -t -f UUID,DEVICE connection show --active | awk -F: '\''\$2 != \"lo\" {print \$1; exit}'\''' ")
-[[ $connection_uuid =~ ^[[:xdigit:]-]{36}$ ]] || { printf 'FAIL: invalid active NetworkManager connection UUID: %q\n' "$connection_uuid" >&2; exit 1; }
+# Keep the Kickstart profile intact but prevent it from reconnecting on a clone.
+# A separate DHCP profile bound to the source's NIC name avoids stale static
+# identity/address data while retaining autoconnect on the clone's virtio NIC.
+active_nic=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'nmcli -t -f UUID,DEVICE connection show --active | awk -F: '\''\$2 != \"lo\" {print \$1 \" \" \$2; exit}'\''' ")
+read -r connection_uuid nic_device <<< "$active_nic"
+[[ $connection_uuid =~ ^[[:xdigit:]-]{36}$ && $nic_device =~ ^[[:alnum:]_.:-]+$ ]] || { printf 'FAIL: invalid active NetworkManager profile/NIC identity: %q\n' "$active_nic" >&2; exit 1; }
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo nmcli connection modify uuid $connection_uuid ipv4.method auto ipv4.addresses \"\" ipv4.gateway \"\" ipv4.dns \"\" connection.interface-name \"\" 802-3-ethernet.mac-address \"\"'"
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo nmcli connection modify uuid $connection_uuid connection.autoconnect no && sudo nmcli connection add type ethernet con-name nested-image-dhcp ifname $nic_device connection.autoconnect yes ipv4.method auto ipv6.method disabled'"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo systemctl reboot'" >/dev/null 2>&1 || true
 source_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
