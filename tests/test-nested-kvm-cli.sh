@@ -72,7 +72,12 @@ grep -Fq 'virsh domblklist --details' "$root/scripts/test-nested-kvm"
 grep -Fq 'clone_ipv4' "$root/scripts/test-nested-kvm"
 grep -Fq 'ipaddress.IPv4Address' "$root/scripts/test-nested-kvm"
 grep -Fq 'clone_deadline=' "$root/scripts/test-nested-kvm"
-grep -Fq 'wait_guest_ssh()' "$root/scripts/test-nested-kvm"
+wait_definition_line=$(grep -nF 'wait_guest_ssh()' "$root/scripts/test-nested-kvm" | head -n1 | cut -d: -f1)
+wait_first_call_line=$(grep -nE 'wait_guest_ssh "' "$root/scripts/test-nested-kvm" | head -n1 | cut -d: -f1)
+[[ -n $wait_definition_line && -n $wait_first_call_line && $wait_definition_line -lt $wait_first_call_line ]] || {
+  printf 'Expected wait_guest_ssh to be defined before every invocation.\n' >&2
+  exit 1
+}
 grep -Fq 'nmcli connection modify' "$root/scripts/test-nested-kvm"
 grep -Fq 'source_state' "$root/scripts/test-nested-kvm"
 render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | head -n1 | cut -d: -f1)
