@@ -47,6 +47,11 @@ cleanup() {
   local status=$?
   trap - EXIT INT TERM
   if ((status != 0)); then
+    if [[ -n ${address:-} ]]; then
+      printf '\n--- nested libvirt diagnostics (before cleanup) ---\n' >&2
+      ssh -F /dev/null -i "$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        "molecule@$address" "for n in 'inner-$hash' 'image-$hash'; do echo === \$n ===; sudo virsh domstate \$n; sudo virsh domiflist \$n; sudo virsh domifaddr \$n --source lease; done" >&2 || true
+    fi
     for log in "$work"/*ansible-run-*.log; do
       [[ -f $log ]] || continue
       printf '\n--- %s ---\n' "${log##*/}" >&2
@@ -138,6 +143,18 @@ for ((i=0; i<360; i++)); do
   if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'" >/dev/null 2>&1; then break; fi
   sleep 5
 done
+clone_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh domiflist '$image_vm' | awk '\$3 == \"network\" {print tolower(\$5); exit}'")
+[[ $clone_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]] || { printf 'FAIL: invalid clone NIC MAC: %q\n' "$clone_mac" >&2; exit 1; }
+clone_lease=; lease_deadline=$((SECONDS + 180))
+while ((SECONDS < lease_deadline)); do
+  clone_lease=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo virsh domifaddr '$image_vm' --source lease | awk -v mac='$clone_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || clone_lease=
+  [[ $clone_lease =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+  sleep 3
+done
+[[ $clone_lease =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'FAIL: clone obtained no DHCP lease for NIC %s.\n' "$clone_mac" >&2; exit 1; }
+wait_guest_ssh "$clone_lease" "$((SECONDS + 120))" || { printf 'FAIL: clone DHCP lease %s failed SSH/Rocky verification.\n' "$clone_lease" >&2; exit 1; }
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
 hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
@@ -149,8 +166,34 @@ hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=
 guest_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -Fx '192.168.250.210')
 [[ $guest_ipv4 == 192.168.250.210 ]] || { printf 'FAIL: inner guest does not have expected static IPv4 address.\n' >&2; exit 1; }
-# Preserve the verified ISO-installed disk as the image source, and stop its
-# static-IP guest before booting the clone on the same address.
+# Convert the verified ISO guest's active profile to DHCP before cloning. A
+# Kickstart static profile can be tied to the source NIC identity.
+connection_uuid=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'nmcli -t -f UUID,DEVICE connection show --active | awk -F: '\''\$2 != \"lo\" {print \$1; exit}'\''' ")
+[[ $connection_uuid =~ ^[[:xdigit:]-]{36}$ ]] || { printf 'FAIL: invalid active NetworkManager connection UUID: %q\n' "$connection_uuid" >&2; exit 1; }
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo nmcli connection modify uuid $connection_uuid ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns "" connection.interface-name "" 802-3-ethernet.mac-address "" && sudo systemctl reboot'" >/dev/null 2>&1 || true
+wait_guest_ssh() {
+  local ip=$1 deadline=$2
+  while ((SECONDS < deadline)); do
+    if ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+      "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$ip 'test -f /etc/rocky-release'" >/dev/null 2>&1; then return 0; fi
+    sleep 3
+  done
+  return 1
+}
+source_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh domiflist '$inner' | awk '\$3 == \"network\" {print tolower(\$5); exit}'")
+[[ $source_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]] || { printf 'FAIL: invalid source NIC MAC: %q\n' "$source_mac" >&2; exit 1; }
+lease_deadline=$((SECONDS + 180)); source_lease=
+while ((SECONDS < lease_deadline)); do
+  source_lease=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo virsh domifaddr '$inner' --source lease | awk -v mac='$source_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || source_lease=
+  [[ $source_lease =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
+  sleep 3
+done
+[[ $source_lease =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'FAIL: no DHCP lease found for source NIC %s.\n' "$source_mac" >&2; exit 1; }
+wait_guest_ssh "$source_lease" "$((SECONDS + 30))" || { printf 'FAIL: DHCP source lease %s failed SSH verification.\n' "$source_lease" >&2; exit 1; }
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh shutdown '$inner'"
 shutdown_deadline=$((SECONDS + 240))
 while ((SECONDS < shutdown_deadline)); do
@@ -173,16 +216,13 @@ for run in 1 2; do
   if ((run == 2)); then "$repo_root/scripts/check-nested-kvm-idempotence" "$work/image-ansible-run-$run.log"; fi
 done
 for ((i=0; i<360; i++)); do
-  if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-    "sudo virsh dominfo '$image_vm' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'" >/dev/null 2>&1; then break; fi
+  if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh dominfo '$image_vm' >/dev/null" >/dev/null 2>&1; then break; fi
   sleep 5
 done
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "sudo virsh dominfo '$image_vm' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
-clone_hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'hostnamectl --static'")
+clone_hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$clone_lease 'hostnamectl --static'")
 [[ $clone_hostname == nested-role-integration.example.test ]] || { printf 'FAIL: image clone static hostname is %q, expected nested-role-integration.example.test.\n' "$clone_hostname" >&2; exit 1; }
-clone_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -Fx '192.168.250.210')
-[[ $clone_ipv4 == 192.168.250.210 ]] || { printf 'FAIL: image clone does not have expected static IPv4 address.\n' >&2; exit 1; }
+clone_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$clone_lease 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+[[ $clone_ipv4 == "$clone_lease" ]] || { printf 'FAIL: clone IPv4 %s does not match its libvirt lease %s.\n' "$clone_ipv4" "$clone_lease" >&2; exit 1; }
 source_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" | tr -d '\r')
 [[ $source_state == 'shut off' ]] || { printf 'FAIL: ISO source guest %s is not shut off after image clone provisioning (state: %s).\n' "$inner" "$source_state" >&2; exit 1; }
 printf 'PASS: role %s provisioned ISO guest %s and image clone %s; both booted Rocky Linux.\n' "$role_path" "$inner" "$image_vm"

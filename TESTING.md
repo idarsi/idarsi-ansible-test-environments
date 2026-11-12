@@ -41,15 +41,21 @@ It creates a uniquely named outer guest with host-passthrough CPU, installs this
 checkout's KVM host setup inside it, then runs the selected role on that outer
 guest to provision and install the inner Rocky guest from ISO. After checking
 the ISO guest's Rocky OS, hostname, static address, SSH access, and second-run
-idempotence, the harness gracefully shuts it down and preserves its qcow2 disk.
+idempotence, the harness records the active NetworkManager connection UUID,
+converts that profile from static addressing to DHCP, reboots (tolerating the
+expected SSH disconnect), and confirms a lease matching the source NIC MAC via
+`virsh domifaddr --source lease` plus SSH. It then gracefully shuts down and
+preserves that qcow2 disk.
 It then provisions a uniquely named clone using `source.type: image` and that
 preconfigured disk, checks importing/booting the image and second-run
-idempotence, and verifies the clone boots Rocky, reports the expected static
-hostname, accepts SSH, and retains the expected static IPv4 address. The image
+idempotence, and verifies the clone has a lease matching its libvirt NIC MAC,
+accepts SSH, boots Rocky, retains the inherited hostname, and has the leased
+IPv4 address. On failure, the harness prints libvirt domain, interface, and
+lease diagnostics before cleanup. The image
 path tests importing and booting a preconfigured ISO-installed image, not image
 customization; its blueprint omits network configuration because the image
-already carries its hostname and IP. The source guest
-stays shut off while the clone uses `.210`. This image-source extension is
+already carries its hostname and a DHCP profile. The source guest stays shut
+off while the clone obtains its own lease on `idarsi-test`. This image-source extension is
 designed coverage and is pending runtime verification; it does not yet add
 verified test evidence. The outer test VM is
 created only by manual harness invocation; the role is not run on the physical
