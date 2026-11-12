@@ -176,8 +176,18 @@ read -r connection_uuid nic_device <<< "$active_nic"
 [[ $connection_uuid =~ ^[[:xdigit:]-]{36}$ && $nic_device =~ ^[[:alnum:]_.:-]+$ ]] || { printf 'FAIL: invalid active NetworkManager profile/NIC identity: %q\n' "$active_nic" >&2; exit 1; }
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo nmcli connection modify uuid $connection_uuid connection.autoconnect no && sudo nmcli connection add type ethernet con-name nested-image-dhcp ifname $nic_device connection.autoconnect yes ipv4.method auto ipv6.method disabled'"
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo systemctl reboot'" >/dev/null 2>&1 || true
+source_boot_id=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'cat /proc/sys/kernel/random/boot_id'")
+[[ $source_boot_id =~ ^[[:xdigit:]-]{36}$ ]] || { printf 'FAIL: invalid source guest boot ID before reboot: %q; check guest SSH authentication/connectivity.\n' "$source_boot_id" >&2; exit 1; }
+if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo systemctl reboot'" >/dev/null 2>&1; then
+  :
+else
+  reboot_status=$?
+  # SSH status 255 is expected when reboot drops the transport. Strict-auth
+  # commands below verify recovery; profile and authentication failures remain fatal.
+  [[ $reboot_status == 255 ]] || { printf 'FAIL: reboot command failed with SSH status %s.\n' "$reboot_status" >&2; exit 1; }
+fi
 source_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "sudo virsh domiflist '$inner' | awk '\$3 == \"network\" {print tolower(\$5); exit}'")
 [[ $source_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]] || { printf 'FAIL: invalid source NIC MAC: %q\n' "$source_mac" >&2; exit 1; }
@@ -189,7 +199,16 @@ while ((SECONDS < lease_deadline)); do
   sleep 3
 done
 validate_ipv4 "$source_lease" || { printf 'FAIL: no valid IPv4 DHCP lease found for source NIC %s.\n' "$source_mac" >&2; exit 1; }
-wait_guest_ssh "$source_lease" "$((SECONDS + 30))" || { printf 'FAIL: DHCP source lease %s failed SSH verification.\n' "$source_lease" >&2; exit 1; }
+wait_guest_ssh "$source_lease" "$((SECONDS + 180))" || { printf 'FAIL: DHCP source lease %s failed SSH verification after reboot (previous boot ID: %s).\n' "$source_lease" "$source_boot_id" >&2; exit 1; }
+source_new_boot_id=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null molecule@$source_lease 'cat /proc/sys/kernel/random/boot_id'")
+if [[ ! $source_new_boot_id =~ ^[[:xdigit:]-]{36}$ || $source_new_boot_id == "$source_boot_id" ]]; then
+  printf 'FAIL: reboot not verified (before boot ID: %s, after boot ID: %s, DHCP lease: %s).\n' \
+    "$source_boot_id" "${source_new_boot_id:-unavailable}" "$source_lease" >&2
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo virsh domstate '$inner'; sudo virsh domifaddr '$inner' --source lease" >&2 || true
+  exit 1
+fi
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh shutdown '$inner'"
 shutdown_deadline=$((SECONDS + 240))
 while ((SECONDS < shutdown_deadline)); do

@@ -79,6 +79,13 @@ wait_first_call_line=$(grep -nE 'wait_guest_ssh "' "$root/scripts/test-nested-kv
   exit 1
 }
 grep -Fq 'nmcli connection modify' "$root/scripts/test-nested-kvm"
+grep -Fq 'source_boot_id=$(ssh' "$root/scripts/test-nested-kvm"
+grep -Fq 'source_new_boot_id == "$source_boot_id"' "$root/scripts/test-nested-kvm"
+grep -Fq 'reboot_status == 255' "$root/scripts/test-nested-kvm"
+if grep -F "sudo systemctl reboot'\" >/dev/null 2>&1 || true" "$root/scripts/test-nested-kvm"; then
+  echo 'Reboot command must not mask failed reboot/SSH status.' >&2
+  exit 1
+fi
 grep -Fq 'source_state' "$root/scripts/test-nested-kvm"
 render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | head -n1 | cut -d: -f1)
 mkdir_line=$(grep -nF 'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX")' "$root/scripts/test-nested-kvm" | cut -d: -f1)
