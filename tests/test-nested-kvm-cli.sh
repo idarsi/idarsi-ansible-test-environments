@@ -70,6 +70,10 @@ EOF
 grep -Fq "hostnamectl --static" "$root/scripts/test-nested-kvm"
 grep -Fq 'virsh domblklist --details' "$root/scripts/test-nested-kvm"
 grep -Fq 'clone_ipv4' "$root/scripts/test-nested-kvm"
+grep -Fq 'ipaddress.IPv4Address' "$root/scripts/test-nested-kvm"
+grep -Fq 'clone_deadline=' "$root/scripts/test-nested-kvm"
+grep -Fq 'wait_guest_ssh()' "$root/scripts/test-nested-kvm"
+grep -Fq 'nmcli connection modify' "$root/scripts/test-nested-kvm"
 grep -Fq 'source_state' "$root/scripts/test-nested-kvm"
 render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | head -n1 | cut -d: -f1)
 mkdir_line=$(grep -nF 'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX")' "$root/scripts/test-nested-kvm" | cut -d: -f1)
