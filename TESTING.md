@@ -82,6 +82,15 @@ cleanup over SSH is best effort; failure to destroy the outer VM is reported.
 Private temporary artifacts are removed on exit; no host-wide uninstall runs.
 Allow at least 8 GiB RAM and four CPUs for the outer guest, in addition to the
 inner guest resources.
+The ISO blueprint requests 2048 MB, 2 vCPUs, and a 10 GB disk; the image-clone
+blueprint requests 1024 MB, 1 vCPU, and a 10 GB disk. The harness verifies
+libvirt `dominfo` memory/CPU and `domblkinfo` capacity against these declared
+values for both guests. `tests/test_nested_kvm_resources.py` covers parser
+success, resource mismatch, and missing fields without requiring a VM. The
+role-owned `kvm-lifecycle` Molecule scenario invokes this harness and is a
+manual, expensive integration check, not PR CI. Its one Rocky 10 host/guest
+result and preconfigured ISO-derived image source are the limits of current
+integration evidence.
 The generated blueprint statically configures the inner guest at
 `192.168.250.210/24` on the repository-created `idarsi-test` network, with
 gateway and nameserver `192.168.250.1`. This address is outside the DHCP pool
