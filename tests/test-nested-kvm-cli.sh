@@ -30,4 +30,12 @@ if IDARSI_RUN_NESTED_KVM_TEST=1 KVM_NESTED_ROLE_PATH="$tmp/env-role" \
 fi
 grep -q 'provide a readable Rocky 10 install ISO' "$tmp/out"
 IDARSI_RUN_NESTED_KVM_TEST=0 "$root/scripts/test-nested-kvm" --help >/dev/null
-printf 'Nested KVM role-path CLI checks passed.\n'
+"$root/scripts/render-nested-kvm-playbook" "$tmp/playbook.yml" inner-test
+grep -Fq '    kvm_network: "idarsi-test"' "$tmp/playbook.yml"
+grep -Fq '      kvm:' "$tmp/playbook.yml"
+grep -Fq '          - name: "inner-test"' "$tmp/playbook.yml"
+if grep -Fq '        network:' "$tmp/playbook.yml"; then
+  echo 'The KVM network must be passed as a role variable, not blueprint data.' >&2
+  exit 1
+fi
+printf 'Nested KVM CLI and playbook rendering checks passed.\n'

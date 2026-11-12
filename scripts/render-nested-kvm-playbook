@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Render the playbook used to provision a nested KVM integration guest."""
+
+from pathlib import Path
+import sys
+
+if len(sys.argv) != 3:
+    raise SystemExit("Usage: render-nested-kvm-playbook OUTPUT INNER_VM_NAME")
+
+output = Path(sys.argv[1])
+inner_vm_name = sys.argv[2]
+output.write_text(
+    '''---
+- name: Provision nested integration guest
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_collections_path: /opt/idarsi-nested-kvm/collections
+    kvm_network: "idarsi-test"
+    iac_blueprint:
+      kvm:
+        instances:
+          - name: "'''
+    + inner_vm_name
+    + '''"
+            hostname: "nested-role-integration.example.test"
+            memory_mb: 2048
+            vcpus: 2
+            disk_gb: 10
+            source:
+              type: "iso"
+              path: "/tmp/nested-kvm-install.iso"
+              kickstart: "/tmp/inner.ks"
+              os_variant: "rocky9"
+  roles:
+    - role: /opt/idarsi-nested-kvm/role
+''',
+    encoding="utf-8",
+)
