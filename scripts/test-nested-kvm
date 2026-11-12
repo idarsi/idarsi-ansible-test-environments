@@ -46,6 +46,13 @@ mkdir -m 700 "$MOLECULE_EPHEMERAL_DIRECTORY"
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
+  if ((status != 0)); then
+    for log in "$work"/ansible-run-*.log; do
+      [[ -f $log ]] || continue
+      printf '\n--- %s ---\n' "${log##*/}" >&2
+      cat "$log" >&2
+    done
+  fi
   if [[ -n ${address:-} ]]; then
     ssh -F /dev/null -i "$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       "molecule@$address" "sudo virsh destroy 'inner-$hash' >/dev/null 2>&1 || true; sudo virsh undefine 'inner-$hash' --remove-all-storage >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
@@ -130,8 +137,17 @@ playbook_dir=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyCheck
   'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX") && chmod 0700 "$dir" && printf "%s" "$dir"')
 scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   "$work/playbook.yml" "molecule@$address:$playbook_dir/playbook.yml"
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook '$playbook_dir/playbook.yml'"
+for run in 1 2; do
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook '$playbook_dir/playbook.yml'" \
+    2>&1 | tee "$work/ansible-run-$run.log"
+  if ((run == 2)); then
+    grep -Eq 'changed=0([[:space:]]|$)' "$work/ansible-run-$run.log" || {
+      printf 'FAIL: second playbook run did not report changed=0.\n' >&2
+      exit 1
+    }
+  fi
+done
 if [[ -z ${KVM_NESTED_INNER_IPV4_ADDRESS:-} ]]; then
   inner_address=
 fi
@@ -145,4 +161,10 @@ for ((i=0; i<360; i++)); do
 done
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
+hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'hostnamectl --static'")
+[[ $hostname == nested-role-integration.example.test ]] || {
+  printf 'FAIL: inner guest static hostname is %q, expected nested-role-integration.example.test.\n' "$hostname" >&2
+  exit 1
+}
 printf 'PASS: role %s provisioned guest %s and Rocky Linux was installed.\n' "$role_path" "$inner"

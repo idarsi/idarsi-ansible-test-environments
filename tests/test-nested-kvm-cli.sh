@@ -34,6 +34,9 @@ IDARSI_RUN_NESTED_KVM_TEST=0 "$root/scripts/test-nested-kvm" --help >/dev/null
 grep -Fq '    kvm_network: "idarsi-test"' "$tmp/playbook.yml"
 grep -Fq '      kvm:' "$tmp/playbook.yml"
 grep -Fq '          - name: "inner-test"' "$tmp/playbook.yml"
+grep -Fq '            hostname: "nested-role-integration.example.test"' "$tmp/playbook.yml"
+grep -Fq "grep -Eq 'changed=0([[:space:]]|\$)'" "$root/scripts/test-nested-kvm"
+grep -Fq "hostnamectl --static" "$root/scripts/test-nested-kvm"
 render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | tail -n1 | cut -d: -f1)
 mkdir_line=$(grep -nF 'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX")' "$root/scripts/test-nested-kvm" | cut -d: -f1)
 transfer_line=$(grep -nF '"$work/playbook.yml" "molecule@$address:$playbook_dir/playbook.yml"' "$root/scripts/test-nested-kvm" | cut -d: -f1)
