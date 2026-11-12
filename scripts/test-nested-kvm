@@ -152,15 +152,18 @@ guest_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyCheckin
 # Preserve the verified ISO-installed disk as the image source, and stop its
 # static-IP guest before booting the clone on the same address.
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh shutdown '$inner'"
-for ((i=0; i<120; i++)); do
-  state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" | tr -d '\r')
+shutdown_deadline=$((SECONDS + 240))
+while ((SECONDS < shutdown_deadline)); do
+  state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" 2>/dev/null | tr -d '\r') || state=
   [[ $state == 'shut off' ]] && break
   sleep 2
 done
-[[ $state == 'shut off' ]] || { printf 'FAIL: ISO source guest did not shut down gracefully.\n' >&2; exit 1; }
+[[ $state == 'shut off' ]] || { printf 'FAIL: ISO source guest %s did not reach shut off state within 240 seconds (last state: %s).\n' "$inner" "${state:-unavailable}" >&2; exit 1; }
 image_vm="image-$hash"
-source_disk="/var/lib/libvirt/images/$inner.qcow2"
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "test -f '$source_disk' && sudo qemu-img check -f qcow2 '$source_disk'"
+source_disk=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domblklist --details '$inner' | awk '\$2 == \"disk\" {print \$4; exit}'")
+[[ $source_disk == /* && $source_disk == *.qcow2 && $source_disk != *$'\n'* ]] || { printf 'FAIL: invalid discovered qcow2 source disk path: %q\n' "$source_disk" >&2; exit 1; }
+printf -v source_disk_q '%q' "$source_disk"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "test -f $source_disk_q && sudo qemu-img check -f qcow2 $source_disk_q"
 python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/image-playbook.yml" "$image_vm" "$source_disk"
 scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/image-playbook.yml" "molecule@$address:$playbook_dir/image-playbook.yml"
 for run in 1 2; do
@@ -176,4 +179,10 @@ for ((i=0; i<360; i++)); do
 done
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "sudo virsh dominfo '$image_vm' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
+clone_hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'hostnamectl --static'")
+[[ $clone_hostname == nested-role-integration.example.test ]] || { printf 'FAIL: image clone static hostname is %q, expected nested-role-integration.example.test.\n' "$clone_hostname" >&2; exit 1; }
+clone_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -Fx '192.168.250.210')
+[[ $clone_ipv4 == 192.168.250.210 ]] || { printf 'FAIL: image clone does not have expected static IPv4 address.\n' >&2; exit 1; }
+source_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" | tr -d '\r')
+[[ $source_state == 'shut off' ]] || { printf 'FAIL: ISO source guest %s is not shut off after image clone provisioning (state: %s).\n' "$inner" "$source_state" >&2; exit 1; }
 printf 'PASS: role %s provisioned ISO guest %s and image clone %s; both booted Rocky Linux.\n' "$role_path" "$inner" "$image_vm"

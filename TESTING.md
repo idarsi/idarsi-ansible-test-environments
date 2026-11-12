@@ -44,7 +44,8 @@ the ISO guest's Rocky OS, hostname, static address, SSH access, and second-run
 idempotence, the harness gracefully shuts it down and preserves its qcow2 disk.
 It then provisions a uniquely named clone using `source.type: image` and that
 disk, checks image provisioning and second-run idempotence, and verifies the
-clone boots Rocky and accepts SSH at the same static address. The source guest
+clone boots Rocky, reports the expected static hostname, accepts SSH, and has
+the expected static IPv4 address. The source guest
 stays shut off while the clone uses `.210`. This image-source extension is
 designed coverage and is pending runtime verification; it does not yet add
 verified test evidence. The outer test VM is

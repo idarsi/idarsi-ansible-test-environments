@@ -43,17 +43,13 @@ grep -Fq '          - name: "image-test"' "$tmp/image-playbook.yml"
 grep -Fq '              type: "image"' "$tmp/image-playbook.yml"
 grep -Fq '              path: "/var/lib/libvirt/images/inner-test.qcow2"' "$tmp/image-playbook.yml"
 ! grep -Fq 'kickstart:' "$tmp/image-playbook.yml"
-python3 - "$tmp/image-playbook.yml" <<'PY'
-import sys
-try:
-    import yaml
-except ImportError as error:
-    raise SystemExit(f"PyYAML is required for the render/parser test: {error}")
-with open(sys.argv[1], encoding="utf-8") as stream:
-    playbook = yaml.safe_load(stream)
-source = playbook[0]["vars"]["iac_blueprint"]["kvm"]["instances"][0]["source"]
-assert source == {"type": "image", "path": "/var/lib/libvirt/images/inner-test.qcow2"}
-PY
+if "$root/scripts/render-nested-kvm-playbook" "$tmp/bad-image.yml" image-test 'relative path.qcow2' >"$tmp/out" 2>&1; then
+  echo 'Expected relative image path to be rejected.' >&2
+  exit 1
+fi
+grep -Fq 'IMAGE_PATH must be an absolute path ending in .qcow2' "$tmp/out"
+"$root/scripts/render-nested-kvm-playbook" "$tmp/quoted-image.yml" image-test '/var/lib/libvirt/images/a "quoted" path.qcow2'
+grep -Fq 'path: "/var/lib/libvirt/images/a \"quoted\" path.qcow2"' "$tmp/quoted-image.yml"
 cat >"$tmp/recap-bad.log" <<'EOF'
 changed=0 is just a message, not a recap
 PLAY RECAP *********************************************************************
@@ -69,6 +65,9 @@ localhost : ok=2 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
 EOF
 "$root/scripts/check-nested-kvm-idempotence" "$tmp/recap-good.log"
 grep -Fq "hostnamectl --static" "$root/scripts/test-nested-kvm"
+grep -Fq 'virsh domblklist --details' "$root/scripts/test-nested-kvm"
+grep -Fq 'clone_ipv4' "$root/scripts/test-nested-kvm"
+grep -Fq 'source_state' "$root/scripts/test-nested-kvm"
 render_line=$(grep -nF 'render-nested-kvm-playbook' "$root/scripts/test-nested-kvm" | head -n1 | cut -d: -f1)
 mkdir_line=$(grep -nF 'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX")' "$root/scripts/test-nested-kvm" | cut -d: -f1)
 transfer_line=$(grep -nF '"$work/playbook.yml" "molecule@$address:$playbook_dir/playbook.yml"' "$root/scripts/test-nested-kvm" | cut -d: -f1)
