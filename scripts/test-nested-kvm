@@ -6,7 +6,21 @@ if [[ ${IDARSI_RUN_NESTED_KVM_TEST:-} != 1 ]]; then
   printf 'SKIP: set IDARSI_RUN_NESTED_KVM_TEST=1 to opt in to the nested KVM integration test.\n'
   exit 0
 fi
-iso=${1:-${IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10:-}}
+role_path=${KVM_NESTED_ROLE_PATH:-${IDARSI_KVM_ROLE_PATH:-}}
+iso=
+while (($#)); do
+  case $1 in
+    --role-path) (($# >= 2)) || { echo 'FAIL: --role-path requires a directory.' >&2; exit 1; }; role_path=$2; shift 2 ;;
+    --role-path=*) role_path=${1#*=}; shift ;;
+    --help) echo 'Usage: test-nested-kvm [ISO] [--role-path ROLE_DIRECTORY]'; exit 0 ;;
+    -*) echo "FAIL: unknown option: $1" >&2; exit 2 ;;
+    *) [[ -z $iso ]] || { echo 'FAIL: only one ISO path may be provided.' >&2; exit 2; }; iso=$1; shift ;;
+  esac
+done
+iso=${iso:-${IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10:-}}
+[[ -n $role_path ]] || { printf 'FAIL: provide the KVM role directory with --role-path or KVM_NESTED_ROLE_PATH.\n' >&2; exit 1; }
+role_path=$(cd "$role_path" 2>/dev/null && pwd) || { printf 'FAIL: KVM role directory is unavailable: %s\n' "$role_path" >&2; exit 1; }
+[[ -f $role_path/tasks/main.yml && -f $role_path/requirements.yml ]] || { printf 'FAIL: not an ansible-iac-roles-kvm role directory: %s\n' "$role_path" >&2; exit 1; }
 if [[ -z $iso || ! -r $iso || ! -f $iso ]]; then
   printf 'FAIL: provide a readable Rocky 10 install ISO as argument or IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10.\n' >&2
   exit 1
@@ -32,9 +46,21 @@ mkdir -m 700 "$MOLECULE_EPHEMERAL_DIRECTORY"
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
+  if ((status != 0)); then
+    if [[ -n ${address:-} ]]; then
+      printf '\n--- nested libvirt diagnostics (before cleanup) ---\n' >&2
+      ssh -F /dev/null -i "$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        "molecule@$address" "for n in 'inner-$hash' 'image-$hash'; do echo === \$n ===; sudo virsh domstate \$n; sudo virsh domiflist \$n; sudo virsh domifaddr \$n --source lease; done" >&2 || true
+    fi
+    for log in "$work"/*ansible-run-*.log; do
+      [[ -f $log ]] || continue
+      printf '\n--- %s ---\n' "${log##*/}" >&2
+      cat "$log" >&2
+    done
+  fi
   if [[ -n ${address:-} ]]; then
     ssh -F /dev/null -i "$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      "molecule@$address" "sudo virsh destroy 'inner-$hash' >/dev/null 2>&1 || true; sudo virsh undefine 'inner-$hash' --remove-all-storage >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+      "molecule@$address" "for name in 'inner-$hash' 'image-$hash'; do sudo virsh destroy \"\$name\" >/dev/null 2>&1 || true; sudo virsh undefine \"\$name\" --remove-all-storage >/dev/null 2>&1 || true; done" >/dev/null 2>&1 || true
   fi
   # The inner VM and its disk exist only inside this uniquely owned outer VM.
   # Destroying the outer VM on the host is the ultimate cleanup, even if SSH fails.
@@ -51,6 +77,19 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+wait_guest_ssh() {
+  local ip=$1 deadline=$2
+  while ((SECONDS < deadline)); do
+    if ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+      "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$ip 'test -f /etc/rocky-release'" >/dev/null 2>&1; then return 0; fi
+    sleep 3
+  done
+  return 1
+}
+validate_ipv4() {
+  python3 -c 'import ipaddress,sys; ipaddress.IPv4Address(sys.argv[1])' "$1" >/dev/null 2>&1
+}
+
 export MOLECULE_SCENARIO_DIRECTORY="$repo_root/molecule/kvm-smoke"
 export KVM_LIBVIRT_URI="$uri" KVM_CPU_HOST_PASSTHROUGH=true
 export KVM_VCPUS=${KVM_NESTED_OUTER_VCPUS:-4} KVM_MEMORY_MB=${KVM_NESTED_OUTER_MEMORY_MB:-8192}
@@ -60,11 +99,11 @@ result=$("$repo_root/scripts/kvm-vm" create "$outer" "$iso" "$repo_root/examples
 address=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["address"])' "$result")
 key="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"
 
-# Install this checkout's KVM host setup in the outer guest, then prove KVM by
-# launching an inner guest with the same trusted installation ISO.
+# Install this checkout's KVM host setup in the outer guest, then run the
+# selected KVM role there to provision the inner guest.
 # Transfer only the files needed to install and exercise this checkout. This
 # intentionally excludes inventory, SSH material, local configuration, and Git metadata.
-  tar -C "$repo_root" -czf "$work/repo.tgz" \
+tar -C "$repo_root" -czf "$work/repo.tgz" \
   config/idarsi-test-network.xml scripts/setup-host scripts/kvm-base-dir
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   "molecule@$address" 'mkdir -p ~/nested-kvm-repo'
@@ -77,17 +116,6 @@ inner="inner-$hash"
 inner_key="$work/inner_ed25519"
 ssh-keygen -q -t ed25519 -N '' -f "$inner_key"
 network='network --bootproto=dhcp --device=link --activate'
-if [[ -n ${KVM_NESTED_INNER_IPV4_ADDRESS:-} ]]; then
-  PYTHONPATH="$repo_root/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "${KVM_NESTED_INNER_IPV4_ADDRESS}" "${KVM_NESTED_INNER_NETMASK:-255.255.255.0}" "${KVM_NESTED_INNER_GATEWAY:-192.168.250.1}" "${KVM_NESTED_INNER_NAMESERVER:-192.168.250.1}" <<'PY'
-import sys
-from nested_ipv4 import validate
-try:
-    validate(*sys.argv[1:])
-except ValueError as error:
-    raise SystemExit(f"Invalid static inner IPv4 configuration: {error}") from error
-PY
-  network="network --bootproto=static --ip=${KVM_NESTED_INNER_IPV4_ADDRESS} --netmask=${KVM_NESTED_INNER_NETMASK:-255.255.255.0} --gateway=${KVM_NESTED_INNER_GATEWAY:-192.168.250.1} --nameserver=${KVM_NESTED_INNER_NAMESERVER:-192.168.250.1} --device=link --activate"
-fi
 python3 - "$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl" "$work/inner.ks" "$inner_key.pub" "$network" <<'PY'
 from pathlib import Path
 import sys
@@ -99,22 +127,129 @@ for token in ('@@SSH_USER@@', '@@SSH_PUBLIC_KEY@@', '@@NETWORK_CONFIGURATION@@')
 Path(sys.argv[2]).write_text(template.replace('@@SSH_USER@@', 'molecule').replace('@@SSH_PUBLIC_KEY@@', pubkey).replace('@@NETWORK_CONFIGURATION@@', sys.argv[4]))
 PY
 chmod 600 "$work/inner.ks"
-inner_address=${KVM_NESTED_INNER_IPV4_ADDRESS:-}
+inner_address=192.168.250.210
 scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/inner.ks" "molecule@$address:/tmp/inner.ks"
 scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$inner_key" "$inner_key.pub" "molecule@$address:/tmp/"
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-  "molecule@$address" "sudo virt-host-validate qemu && grep -Eq '(vmx|svm)' /proc/cpuinfo && sudo virt-install --connect qemu:///system --name '$inner' --memory 2048 --vcpus 2 --disk size=10 --network network=idarsi-test,model=virtio --os-variant rocky9 --location /tmp/nested-kvm-install.iso --initrd-inject /tmp/inner.ks --extra-args 'inst.ks=file:/inner.ks console=ttyS0,115200n8' --graphics none --noautoconsole --wait 360"
+# Transfer only executable role content; never include VCS metadata, tests,
+# local secrets, or developer configuration. Dependencies are resolved in a
+# private path on the outer guest.
+tar -C "$role_path" --exclude=.git --exclude=.env --exclude='*secret*' --exclude='*credential*' \
+  -czf "$work/kvm-role.tgz" defaults filter_plugins tasks templates requirements.yml
+scp -F /dev/null -i "$key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/kvm-role.tgz" "molecule@$address:/tmp/kvm-role.tgz"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "install -d -m 700 \"\$HOME/.ssh/nested-kvm\" && install -m 600 /tmp/inner_ed25519 \"\$HOME/.ssh/nested-kvm/inner_ed25519\" && install -m 644 /tmp/inner_ed25519.pub \"\$HOME/.ssh/nested-kvm/inner_ed25519.pub\" && rm -f /tmp/inner_ed25519 /tmp/inner_ed25519.pub"
-if [[ -z ${KVM_NESTED_INNER_IPV4_ADDRESS:-} ]]; then
-  inner_address=
-fi
-for ((i=0; i<360; i++)); do
-  if [[ -z $inner_address ]]; then
-    inner_address=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domifaddr '$inner' --source lease --full 2>/dev/null | awk '\$3 == \"ipv4\" {sub(/\\/.*/, \"\", \$4); print \$4; exit}'" 2>/dev/null || true)
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo dnf install -y ansible-core lorax && sudo install -d -m 755 /opt/idarsi-nested-kvm/role /opt/idarsi-nested-kvm/collections && sudo tar -xzf /tmp/kvm-role.tgz -C /opt/idarsi-nested-kvm/role && sudo chown -R molecule:molecule /opt/idarsi-nested-kvm && ansible-galaxy collection install -r /opt/idarsi-nested-kvm/role/requirements.yml -p /opt/idarsi-nested-kvm/collections"
+python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/playbook.yml" "$inner"
+playbook_dir=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  'dir=$(mktemp -d "$HOME/nested-kvm-playbook.XXXXXX") && chmod 0700 "$dir" && printf "%s" "$dir"')
+scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "$work/playbook.yml" "molecule@$address:$playbook_dir/playbook.yml"
+for run in 1 2; do
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook '$playbook_dir/playbook.yml'" \
+    2>&1 | tee "$work/ansible-run-$run.log"
+  if ((run == 2)); then
+    "$repo_root/scripts/check-nested-kvm-idempotence" "$work/ansible-run-$run.log"
   fi
-  [[ -n $inner_address ]] || { sleep 5; continue; }
-  if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'" >/dev/null 2>&1; then break; fi
+done
+for ((i=0; i<360; i++)); do
+  if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'" >/dev/null 2>&1; then break; fi
   sleep 5
 done
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
-printf 'PASS: outer guest installed this repository KVM setup and booted an inner guest.\n'
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
+hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'hostnamectl --static'")
+[[ $hostname == nested-role-integration.example.test ]] || {
+  printf 'FAIL: inner guest static hostname is %q, expected nested-role-integration.example.test.\n' "$hostname" >&2
+  exit 1
+}
+guest_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -Fx '192.168.250.210')
+[[ $guest_ipv4 == 192.168.250.210 ]] || { printf 'FAIL: inner guest does not have expected static IPv4 address.\n' >&2; exit 1; }
+# Keep the Kickstart profile intact but prevent it from reconnecting on a clone.
+# A separate DHCP profile bound to the source's NIC name avoids stale static
+# identity/address data while retaining autoconnect on the clone's virtio NIC.
+active_nic=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'nmcli -t -f UUID,DEVICE connection show --active | awk -F: '\''\$2 != \"lo\" {print \$1 \" \" \$2; exit}'\''' ")
+read -r connection_uuid nic_device <<< "$active_nic"
+[[ $connection_uuid =~ ^[[:xdigit:]-]{36}$ && $nic_device =~ ^[[:alnum:]_.:-]+$ ]] || { printf 'FAIL: invalid active NetworkManager profile/NIC identity: %q\n' "$active_nic" >&2; exit 1; }
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo nmcli connection modify uuid $connection_uuid connection.autoconnect no && sudo nmcli connection add type ethernet con-name nested-image-dhcp ifname $nic_device connection.autoconnect yes ipv4.method auto ipv6.method disabled'"
+source_boot_id=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'cat /proc/sys/kernel/random/boot_id'")
+[[ $source_boot_id =~ ^[[:xdigit:]-]{36}$ ]] || { printf 'FAIL: invalid source guest boot ID before reboot: %q; check guest SSH authentication/connectivity.\n' "$source_boot_id" >&2; exit 1; }
+if ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'sudo systemctl reboot'" >/dev/null 2>&1; then
+  :
+else
+  reboot_status=$?
+  # SSH status 255 is expected when reboot drops the transport. Strict-auth
+  # commands below verify recovery; profile and authentication failures remain fatal.
+  [[ $reboot_status == 255 ]] || { printf 'FAIL: reboot command failed with SSH status %s.\n' "$reboot_status" >&2; exit 1; }
+fi
+source_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh domiflist '$inner' | awk '\$3 == \"network\" {print tolower(\$5); exit}'")
+[[ $source_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]] || { printf 'FAIL: invalid source NIC MAC: %q\n' "$source_mac" >&2; exit 1; }
+lease_deadline=$((SECONDS + 180)); source_lease=
+while ((SECONDS < lease_deadline)); do
+  source_lease=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo virsh domifaddr '$inner' --source lease | awk -v mac='$source_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || source_lease=
+  validate_ipv4 "$source_lease" && break
+  sleep 3
+done
+validate_ipv4 "$source_lease" || { printf 'FAIL: no valid IPv4 DHCP lease found for source NIC %s.\n' "$source_mac" >&2; exit 1; }
+wait_guest_ssh "$source_lease" "$((SECONDS + 180))" || { printf 'FAIL: DHCP source lease %s failed SSH verification after reboot (previous boot ID: %s).\n' "$source_lease" "$source_boot_id" >&2; exit 1; }
+source_new_boot_id=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$source_lease 'cat /proc/sys/kernel/random/boot_id'")
+if [[ ! $source_new_boot_id =~ ^[[:xdigit:]-]{36}$ || $source_new_boot_id == "$source_boot_id" ]]; then
+  printf 'FAIL: reboot not verified (before boot ID: %s, after boot ID: %s, DHCP lease: %s).\n' \
+    "$source_boot_id" "${source_new_boot_id:-unavailable}" "$source_lease" >&2
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo virsh domstate '$inner'; sudo virsh domifaddr '$inner' --source lease" >&2 || true
+  exit 1
+fi
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh shutdown '$inner'"
+shutdown_deadline=$((SECONDS + 240))
+while ((SECONDS < shutdown_deadline)); do
+  state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" 2>/dev/null | tr -d '\r') || state=
+  [[ $state == 'shut off' ]] && break
+  sleep 2
+done
+[[ $state == 'shut off' ]] || { printf 'FAIL: ISO source guest %s did not reach shut off state within 240 seconds (last state: %s).\n' "$inner" "${state:-unavailable}" >&2; exit 1; }
+image_vm="image-$hash"
+source_disk=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domblklist --details '$inner' | awk '\$2 == \"disk\" {print \$4; exit}'")
+[[ $source_disk == /* && $source_disk == *.qcow2 && $source_disk != *$'\n'* ]] || { printf 'FAIL: invalid discovered qcow2 source disk path: %q\n' "$source_disk" >&2; exit 1; }
+printf -v source_disk_q '%q' "$source_disk"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "test -f $source_disk_q && sudo qemu-img check -f qcow2 $source_disk_q"
+python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/image-playbook.yml" "$image_vm" "$source_disk"
+scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/image-playbook.yml" "molecule@$address:$playbook_dir/image-playbook.yml"
+for run in 1 2; do
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook '$playbook_dir/image-playbook.yml'" \
+    2>&1 | tee "$work/image-ansible-run-$run.log"
+  if ((run == 2)); then "$repo_root/scripts/check-nested-kvm-idempotence" "$work/image-ansible-run-$run.log"; fi
+done
+clone_deadline=$((SECONDS + 180)); clone_state=unavailable; clone_lease=
+while ((SECONDS < clone_deadline)); do
+  clone_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$image_vm'" 2>/dev/null | tr -d '\r') || clone_state=unavailable
+  if [[ $clone_state == running ]]; then
+    clone_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domiflist '$image_vm' | awk '\$3 == \"network\" {print tolower(\$5); exit}'" 2>/dev/null) || clone_mac=
+    if [[ $clone_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]]; then
+      clone_lease=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domifaddr '$image_vm' --source lease | awk -v mac='$clone_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || clone_lease=
+      if validate_ipv4 "$clone_lease" && wait_guest_ssh "$clone_lease" "$((SECONDS + 15))"; then break; fi
+    fi
+  fi
+  sleep 3
+done
+if ((SECONDS >= clone_deadline)); then
+  printf 'FAIL: clone %s did not become running with a valid DHCP lease and reachable Rocky SSH before timeout (state=%s, MAC=%s, lease=%s).\n' "$image_vm" "$clone_state" "${clone_mac:-unavailable}" "${clone_lease:-unavailable}" >&2
+  exit 1
+fi
+clone_hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$clone_lease 'hostnamectl --static'")
+[[ $clone_hostname == nested-role-integration.example.test ]] || { printf 'FAIL: image clone static hostname is %q, expected nested-role-integration.example.test.\n' "$clone_hostname" >&2; exit 1; }
+clone_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$clone_lease 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+[[ $clone_ipv4 == "$clone_lease" ]] || { printf 'FAIL: clone IPv4 %s does not match its libvirt lease %s.\n' "$clone_ipv4" "$clone_lease" >&2; exit 1; }
+source_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" | tr -d '\r')
+[[ $source_state == 'shut off' ]] || { printf 'FAIL: ISO source guest %s is not shut off after image clone provisioning (state: %s).\n' "$inner" "$source_state" >&2; exit 1; }
+printf 'PASS: role %s provisioned ISO guest %s and image clone %s; both booted Rocky Linux.\n' "$role_path" "$inner" "$image_vm"

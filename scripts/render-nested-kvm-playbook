@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Render the playbook used to provision a nested KVM integration guest."""
+
+from pathlib import Path
+import json
+import sys
+
+if len(sys.argv) not in (3, 4):
+    raise SystemExit("Usage: render-nested-kvm-playbook OUTPUT VM_NAME [IMAGE_PATH]")
+
+if len(sys.argv) == 4 and (not Path(sys.argv[3]).is_absolute() or not sys.argv[3].endswith(".qcow2")):
+    raise SystemExit("IMAGE_PATH must be an absolute path ending in .qcow2")
+
+output = Path(sys.argv[1])
+vm_name = json.dumps(sys.argv[2])
+source = (
+    f'''              type: "image"\n              path: {json.dumps(sys.argv[3])}\n'''
+    if len(sys.argv) == 4
+    else '''              type: "iso"\n              path: "/tmp/nested-kvm-install.iso"\n              kickstart: "/tmp/inner.ks"\n              os_variant: "rocky9"\n'''
+)
+# The image source is already configured by the ISO path; network is ISO-only.
+network = "" if len(sys.argv) == 4 else '''            network:
+              ipv4:
+                address: "192.168.250.210/24"
+                gateway: "192.168.250.1"
+                nameservers: ["192.168.250.1"]
+'''
+output.write_text(
+    '''---
+- name: Provision nested integration guest
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_collections_path: /opt/idarsi-nested-kvm/collections
+    kvm_network: "idarsi-test"
+    iac_blueprint:
+      kvm:
+        instances:
+          - name: '''
+    + vm_name
+    + '''
+            hostname: "nested-role-integration.example.test"
+            memory_mb: 2048
+            vcpus: 2
+            disk_gb: 10
+            source:
+'''
+    + source
+    + network
+    + '''  roles:
+    - role: /opt/idarsi-nested-kvm/role
+''',
+    encoding="utf-8",
+)

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'Usage: %s create|destroy|stop|start <molecule-instance> [install-source kickstart-template]\n' "$0" >&2
+  printf 'Usage: %s create|create-image|destroy|stop|start <molecule-instance> [install-source kickstart-template|qcow2-image]\n' "$0" >&2
 }
 
 [[ $# -ge 2 ]] || { usage; exit 2; }
@@ -58,9 +58,21 @@ case "$action" in
     printf 'Destroyed %s (%s) if it existed.\n' "$instance" "$domain"
     ;;
   create)
+    image_mode=false
     [[ $# -eq 2 ]] || { usage; exit 2; }
     install_source=$1
     kickstart_template=$2
+    ;;
+  create-image)
+    image_mode=true
+    [[ $# -eq 1 ]] || { usage; exit 2; }
+    install_source=$1
+    kickstart_template=
+    ;;
+  *) usage; exit 2 ;;
+esac
+
+if [[ $action == create || $action == create-image ]]; then
     base_mode=${KVM_BASE_IMAGE_MODE:-auto}
     [[ "$base_mode" == auto || "$base_mode" == off ]] || { printf 'KVM_BASE_IMAGE_MODE must be auto or off\n' >&2; exit 2; }
     memory=${KVM_MEMORY_MB:-4096}
@@ -81,6 +93,12 @@ case "$action" in
       fi
       if [[ -e "$install_source" ]]; then install_source=$(realpath "$install_source"); fi
     fi
+    if [[ $image_mode == true ]]; then
+      [[ -f "$install_source" && -r "$install_source" ]] || { printf 'QCOW2 image must be a readable regular file: %s\n' "$install_source" >&2; exit 2; }
+      install_source=$(realpath "$install_source")
+      command -v qemu-img >/dev/null || { printf 'qemu-img is required\n' >&2; exit 1; }
+      [[ $(qemu-img info --output=json "$install_source" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("format", ""))') == qcow2 ]] || { printf 'Image source must be qcow2: %s\n' "$install_source" >&2; exit 2; }
+    else
     if [[ "$kickstart_template" != /* ]]; then
       base_dir=${MOLECULE_SCENARIO_DIRECTORY:-$PWD}
       kickstart_template=$(realpath "$base_dir/$kickstart_template")
@@ -88,6 +106,7 @@ case "$action" in
       kickstart_template=$(realpath "$kickstart_template")
     fi
     [[ -r "$kickstart_template" ]] || { printf 'Kickstart template not found: %s\n' "$kickstart_template" >&2; exit 1; }
+    fi
     "${virsh_cmd[@]}" dominfo "$domain" >/dev/null 2>&1 && {
       printf 'VM %s already exists. Run molecule destroy before creating it again.\n' "$domain" >&2
       exit 1
@@ -108,7 +127,32 @@ case "$action" in
     base_image=
     base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
     overlay="$base_dir/${domain}.qcow2"
-    if [[ "$base_mode" == auto ]]; then
+    if [[ $image_mode == true ]]; then
+      command -v virt-customize >/dev/null || { printf 'virt-customize is required\n' >&2; exit 1; }
+      if [[ -n "$ipv4_address" ]]; then
+        printf 'Static IP config on image guests is not yet supported; use DHCP.\n' >&2
+        exit 2
+      fi
+      [[ ! -e "$overlay" ]] || { printf 'Per-VM overlay already exists: %s. Run molecule destroy first.\n' "$overlay" >&2; exit 1; }
+      network_file="$MOLECULE_EPHEMERAL_DIRECTORY/${domain}.nmconnection"
+      cat >"$network_file" <<EOF
+[connection]
+id=idarsi-test-${instance}
+type=ethernet
+autoconnect=true
+autoconnect-priority=999
+match-device=type:ethernet
+[ipv4]
+method=auto
+[ipv6]
+method=auto
+EOF
+      chmod 600 "$network_file"
+      qemu-img create -f qcow2 -F qcow2 -b "$install_source" "$overlay" >/dev/null
+      customize=(virt-customize -a "$overlay" --hostname "$instance" --ssh-inject "$ssh_user:file:$key_file.pub")
+      customize+=(--upload "$network_file:/etc/NetworkManager/system-connections/99-idarsi-test.nmconnection" --chown 0:0:/etc/NetworkManager/system-connections/99-idarsi-test.nmconnection --chmod 0600:/etc/NetworkManager/system-connections/99-idarsi-test.nmconnection --selinux-relabel)
+      "${customize[@]}" >&2
+    elif [[ "$base_mode" == auto ]]; then
       command -v qemu-img >/dev/null || { printf 'qemu-img is required; run install.sh kvm.\n' >&2; exit 1; }
       command -v virt-customize >/dev/null || { printf 'virt-customize is required; install libguestfs-tools-c with install.sh kvm.\n' >&2; exit 1; }
       source_arg=$install_source
@@ -150,7 +194,7 @@ PY
       fi
       customize+=(--selinux-relabel)
       "${customize[@]}" >&2
-    else
+    elif [[ $image_mode != true ]]; then
       [[ -n "$install_source" && "$install_source" != base-only:* ]] || { printf 'No compatible base image or ISO source is available. Run install.sh kvm and provide/download the Rocky ISO.\n' >&2; exit 1; }
       [[ "$install_source" == http://* || "$install_source" == https://* || -r "$install_source" ]] || { printf 'Install ISO or source path not found: %s\n' "$install_source" >&2; exit 1; }
     fi
@@ -170,6 +214,7 @@ ipaddress.IPv4Network(f"0.0.0.0/{netmask}")
 PY
       network_configuration="network --bootproto=static --ip=${ipv4_address} --netmask=${netmask} --gateway=${gateway} --nameserver=${nameserver} --device=link --activate"
     fi
+    if [[ $image_mode != true ]]; then
     rendered_kickstart="$MOLECULE_EPHEMERAL_DIRECTORY/${domain}.ks.cfg"
     python3 - "$kickstart_template" "$rendered_kickstart" "$ssh_user" "$public_key" "$network_configuration" <<'PY'
 from pathlib import Path
@@ -187,6 +232,7 @@ if "@@" in rendered:
 Path(target).write_text(rendered)
 Path(target).chmod(0o600)
 PY
+    fi
     log_root=${KVM_LOG_DIR:-${TMPDIR:-/tmp}/idarsi-ansible-test-environments/kvm-logs}
     mkdir -p "$log_root"
     find "$log_root" -maxdepth 1 -type f -name 'molecule-*.virt-install.log' -mtime +7 -delete
@@ -194,7 +240,7 @@ PY
     deadline=$((SECONDS + timeout_seconds))
     virt_install_wait_minutes=$(((timeout_seconds + 59) / 60))
     disk_argument="size=${disk_size},format=qcow2,bus=virtio"
-    if [[ "$base_mode" == auto ]]; then
+    if [[ $image_mode == true || "$base_mode" == auto ]]; then
       disk_argument="path=${overlay},format=qcow2,bus=virtio"
     elif [[ -n ${KVM_DISK_PATH:-} ]]; then
       disk_argument="path=${KVM_DISK_PATH},size=${disk_size},format=qcow2,bus=virtio"
@@ -211,9 +257,9 @@ PY
     if [[ ${KVM_CPU_HOST_PASSTHROUGH:-false} == true ]]; then
       virt_install_args+=(--cpu host-passthrough)
     fi
-    if [[ "$base_mode" == auto ]]; then
+    if [[ $image_mode == true || "$base_mode" == auto ]]; then
       virt_install_args+=(--import)
-    else
+    elif [[ $image_mode != true ]]; then
       virt_install_args+=(--location "$install_source" --initrd-inject "$rendered_kickstart" --extra-args "inst.ks=file:/$(basename "$rendered_kickstart") console=ttyS0,115200n8" --wait "$virt_install_wait_minutes")
     fi
     virt-install "${virt_install_args[@]}" >"$install_log" 2>&1 &
@@ -231,7 +277,7 @@ PY
       cat "$install_log" >&2
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
       "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage >/dev/null 2>&1 || true
-      if [[ "$base_mode" == auto ]]; then
+       if [[ $image_mode == true || "$base_mode" == auto ]]; then
         rm -f -- "$overlay"
       fi
       exit 1
@@ -270,7 +316,7 @@ PY
       cat "$install_log" >&2
       "${virsh_cmd[@]}" destroy "$domain" >/dev/null 2>&1 || true
       "${virsh_cmd[@]}" undefine "$domain" --remove-all-storage >/dev/null 2>&1 || true
-      if [[ "$base_mode" == auto ]]; then
+       if [[ $image_mode == true || "$base_mode" == auto ]]; then
         rm -f -- "$overlay"
       fi
       exit 1
@@ -287,6 +333,4 @@ print(json.dumps({
     "identity_file": os.environ["KVM_KEY_FILE"],
 }))
 PY
-    ;;
-  *) usage; exit 2 ;;
-esac
+fi

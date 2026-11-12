@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 1)); then
+  printf 'Usage: check-nested-kvm-idempotence ANSIBLE_PLAYBOOK_LOG\n' >&2
+  exit 2
+fi
+
+awk '
+  /^PLAY RECAP \*\*\*/ { in_recap = 1; next }
+  in_recap && /^localhost[[:space:]]*:/ {
+    found = 1
+    if ($0 ~ /(^|[[:space:]])changed=0([[:space:]]|$)/) success = 1
+    else success = 0
+  }
+  END { exit !(found && success) }
+' "$1" || {
+  printf 'FAIL: second playbook run must include a localhost PLAY RECAP with changed=0.\n' >&2
+  exit 1
+}
