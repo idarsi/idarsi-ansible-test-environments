@@ -43,6 +43,9 @@ grep -Fq '          - name: "image-test"' "$tmp/image-playbook.yml"
 grep -Fq '              type: "image"' "$tmp/image-playbook.yml"
 grep -Fq '              path: "/var/lib/libvirt/images/inner-test.qcow2"' "$tmp/image-playbook.yml"
 ! grep -Fq 'kickstart:' "$tmp/image-playbook.yml"
+! grep -Eq '^            network:' "$tmp/image-playbook.yml"
+grep -Eq '^            network:' "$tmp/playbook.yml"
+grep -Fq '                address: "192.168.250.210/24"' "$tmp/playbook.yml"
 if "$root/scripts/render-nested-kvm-playbook" "$tmp/bad-image.yml" image-test 'relative path.qcow2' >"$tmp/out" 2>&1; then
   echo 'Expected relative image path to be rejected.' >&2
   exit 1

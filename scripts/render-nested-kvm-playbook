@@ -18,6 +18,13 @@ source = (
     if len(sys.argv) == 4
     else '''              type: "iso"\n              path: "/tmp/nested-kvm-install.iso"\n              kickstart: "/tmp/inner.ks"\n              os_variant: "rocky9"\n'''
 )
+# The image source is already configured by the ISO path; network is ISO-only.
+network = "" if len(sys.argv) == 4 else '''            network:
+              ipv4:
+                address: "192.168.250.210/24"
+                gateway: "192.168.250.1"
+                nameservers: ["192.168.250.1"]
+'''
 output.write_text(
     '''---
 - name: Provision nested integration guest
@@ -42,12 +49,8 @@ output.write_text(
             source:
 '''
     + source
-    + '''            network:
-              ipv4:
-                address: "192.168.250.210/24"
-                gateway: "192.168.250.1"
-                nameservers: ["192.168.250.1"]
-  roles:
+    + network
+    + '''  roles:
     - role: /opt/idarsi-nested-kvm/role
 ''',
     encoding="utf-8",
