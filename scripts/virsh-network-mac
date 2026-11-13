@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Extract the first network-interface MAC from `virsh domiflist` output.
+awk '$2 == "network" && $5 ~ /^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$/ {print tolower($5); exit}'
