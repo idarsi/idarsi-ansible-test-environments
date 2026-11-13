@@ -64,6 +64,9 @@ host and cannot create a host-side role-managed VM. Role files are transferred
 as a filtered tar archive without `.git`, tests, secret/credential-named files,
 or local configuration. Ansible Core, Lorax, and the role's pinned collection
 requirements are installed/resolved on the disposable outer guest only.
+The VM-free `tests/test-nested-kvm-renderer.sh` checks exact rendered state and
+purge options. Run it with `make check-scripts`; lifecycle runtime checks remain
+manual and must operate only inside the disposable outer guest.
 Missing nested virtualization support is reported as `SKIP`; once opted in,
 missing prerequisites or test failures are `FAIL`.
 The prerequisite check requires readable CPU flags exposing `vmx` with an

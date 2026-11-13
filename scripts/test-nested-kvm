@@ -222,7 +222,10 @@ source_disk=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecki
 [[ $source_disk == /* && $source_disk == *.qcow2 && $source_disk != *$'\n'* ]] || { printf 'FAIL: invalid discovered qcow2 source disk path: %q\n' "$source_disk" >&2; exit 1; }
 printf -v source_disk_q '%q' "$source_disk"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "test -f $source_disk_q && sudo qemu-img check -f qcow2 $source_disk_q"
-python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/image-playbook.yml" "$image_vm" "$source_disk"
+image_tmp="/var/lib/libvirt/images/$image_vm.qcow2.tmp"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "printf 'incomplete image fixture\\n' | sudo tee '$image_tmp' >/dev/null"
+python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/image-playbook.yml" "$image_vm" "$source_disk" --state vm_present
 scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/image-playbook.yml" "molecule@$address:$playbook_dir/image-playbook.yml"
 for run in 1 2; do
   ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
@@ -230,6 +233,8 @@ for run in 1 2; do
     2>&1 | tee "$work/image-ansible-run-$run.log"
   if ((run == 2)); then "$repo_root/scripts/check-nested-kvm-idempotence" "$work/image-ansible-run-$run.log"; fi
 done
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "test ! -e '$image_tmp'"
 clone_deadline=$((SECONDS + 180)); clone_state=unavailable; clone_lease=
 while ((SECONDS < clone_deadline)); do
   clone_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$image_vm'" 2>/dev/null | tr -d '\r') || clone_state=unavailable
@@ -252,4 +257,23 @@ clone_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyCheckin
 [[ $clone_ipv4 == "$clone_lease" ]] || { printf 'FAIL: clone IPv4 %s does not match its libvirt lease %s.\n' "$clone_ipv4" "$clone_lease" >&2; exit 1; }
 source_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" | tr -d '\r')
 [[ $source_state == 'shut off' ]] || { printf 'FAIL: ISO source guest %s is not shut off after image clone provisioning (state: %s).\n' "$inner" "$source_state" >&2; exit 1; }
+
+# Exercise both removal scopes while all artifacts and package checks remain in
+# the disposable outer guest. The ISO disk is deliberately retained by default.
+run_role_state() {
+  local name=$1 state=$2 purge=$3 check_mode=${4:-}
+  local rendered="$work/$name-$state.yml"
+  python3 "$repo_root/scripts/render-nested-kvm-playbook" "$rendered" "$name" --state "$state" --purge-data-on-remove "$purge"
+  scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$rendered" "molecule@$address:$playbook_dir/$name-$state.yml"
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook $check_mode '$playbook_dir/$name-$state.yml'" \
+    2>&1 | tee "$work/$name-$state.log"
+}
+iso_disk=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domblklist --details '$inner' | awk '\$2 == \"disk\" {print \$4; exit}'")
+run_role_state "$inner" vm_absent false
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "! sudo virsh dominfo '$inner' >/dev/null 2>&1 && test -f '$iso_disk'"
+run_role_state "$inner" vm_absent false  # rerun must be a no-op
+"$repo_root/scripts/check-nested-kvm-idempotence" "$work/$inner-vm_absent.log"
+run_role_state "$image_vm" vm_absent true
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "! sudo virsh dominfo '$image_vm' >/dev/null 2>&1 && ! test -e '/var/lib/libvirt/images/$image_vm.ansible-iac-role-kvm-owned'"
 printf 'PASS: role %s provisioned ISO guest %s and image clone %s; both booted Rocky Linux.\n' "$role_path" "$inner" "$image_vm"

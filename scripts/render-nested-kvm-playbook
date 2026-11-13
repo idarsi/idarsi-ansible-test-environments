@@ -4,18 +4,24 @@
 from pathlib import Path
 import json
 import sys
+import argparse
 
-if len(sys.argv) not in (3, 4):
-    raise SystemExit("Usage: render-nested-kvm-playbook OUTPUT VM_NAME [IMAGE_PATH]")
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("output")
+parser.add_argument("vm_name")
+parser.add_argument("image_path", nargs="?")
+parser.add_argument("--state", choices=("install", "vm_present", "vm_absent", "absent", "validate"), default="install")
+parser.add_argument("--purge-data-on-remove", choices=("true", "false"), default="false")
+args = parser.parse_args()
 
-if len(sys.argv) == 4 and (not Path(sys.argv[3]).is_absolute() or not sys.argv[3].endswith(".qcow2")):
+if args.image_path and (not Path(args.image_path).is_absolute() or not args.image_path.endswith(".qcow2")):
     raise SystemExit("IMAGE_PATH must be an absolute path ending in .qcow2")
 
-output = Path(sys.argv[1])
-vm_name = json.dumps(sys.argv[2])
+output = Path(args.output)
+vm_name = json.dumps(args.vm_name)
 source = (
-    f'''              type: "image"\n              path: {json.dumps(sys.argv[3])}\n'''
-    if len(sys.argv) == 4
+    f'''              type: "image"\n              path: {json.dumps(args.image_path)}\n'''
+    if args.image_path
     else '''              type: "iso"\n              path: "/tmp/nested-kvm-install.iso"\n              kickstart: "/tmp/inner.ks"\n              os_variant: "rocky9"\n'''
 )
 # The image source is already configured by the ISO path; network is ISO-only.
@@ -36,6 +42,9 @@ output.write_text(
     ansible_python_interpreter: /usr/bin/python3
     ansible_collections_path: /opt/idarsi-nested-kvm/collections
     kvm_network: "idarsi-test"
+    state: '''
+    + json.dumps(args.state)
+    + '''
     iac_blueprint:
       kvm:
         instances:
@@ -50,7 +59,8 @@ output.write_text(
 '''
     + source
     + network
-    + '''  roles:
+    + f'''            purge_data_on_remove: {args.purge_data_on_remove}
+  roles:
     - role: /opt/idarsi-nested-kvm/role
 ''',
     encoding="utf-8",
