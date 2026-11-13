@@ -33,6 +33,10 @@ print("PASS: nested KVM renderer state and purge assertions")
 PY
 grep -Fq 'run_role_state "$image_vm" validate false --check' "$root/scripts/test-nested-kvm"
 grep -Fq 'for mutating_state in install vm_present vm_absent absent' "$root/scripts/test-nested-kvm"
-grep -Fq 'not marked as owned' "$root/scripts/test-nested-kvm"
+grep -Fq '<title>ansible-iac-role-kvm-owned</title>' "$root/scripts/test-nested-kvm"
+grep -Fq 'role ownership manifest is missing or unsafe' "$root/scripts/test-nested-kvm"
+grep -Fq 'image_artifacts=$(ssh' "$root/scripts/test-nested-kvm"
+grep -Fq 'while IFS= read -r artifact' "$root/scripts/test-nested-kvm"
+grep -Fq 'manifest-listed image artifact remains after purge' "$root/scripts/test-nested-kvm"
 grep -Fq 'Libvirt domains remain' "$root/scripts/test-nested-kvm"
 grep -Fq 'for package in qemu-kvm libvirt virt-install qemu-img lorax' "$root/scripts/test-nested-kvm"

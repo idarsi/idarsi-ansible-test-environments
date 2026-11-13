@@ -286,16 +286,32 @@ run_role_state "$inner" vm_absent false
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "! sudo virsh dominfo '$inner' >/dev/null 2>&1 && test -f '$iso_disk'"
 run_role_state "$inner" vm_absent false  # rerun must be a no-op
 "$repo_root/scripts/check-nested-kvm-idempotence" "$work/$inner-vm_absent.log"
+image_artifacts=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo python3 -c 'import json,pathlib; p=pathlib.Path(\"/var/lib/libvirt/images/$image_vm.ansible-iac-role-kvm-owned\"); data=json.loads(p.read_text()); print(\"\\n\".join(data[\"artifacts\"]))'")
+[[ -n $image_artifacts ]] || { printf 'FAIL: image ownership manifest contains no artifacts.\n' >&2; exit 1; }
+while IFS= read -r artifact; do
+  case $artifact in
+    "$image_vm.qcow2"|"$image_vm.qcow2.tmp"|"$image_vm-install.iso"|"$image_vm-install.iso.inputs"|"$image_vm-install.ks") ;;
+    *) printf 'FAIL: unexpected image artifact in ownership manifest: %q\n' "$artifact" >&2; exit 1 ;;
+  esac
+done <<<"$image_artifacts"
 run_role_state "$image_vm" vm_absent true
-ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "! sudo virsh dominfo '$image_vm' >/dev/null 2>&1 && ! test -e '/var/lib/libvirt/images/$image_vm.ansible-iac-role-kvm-owned'"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "! sudo virsh dominfo '$image_vm' >/dev/null 2>&1 && ! test -e '/var/lib/libvirt/images/$image_vm.ansible-iac-role-kvm-owned' && ! test -e '/var/lib/libvirt/images/$image_vm.qcow2'"
+while IFS= read -r artifact; do
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "! test -e '/var/lib/libvirt/images/$artifact'" || { printf 'FAIL: manifest-listed image artifact remains after purge: %s\n' "$artifact" >&2; exit 1; }
+done <<<"$image_artifacts"
 
 # Define an explicitly unmanaged, powered-off fixture with the same blueprint
 # name. The role must preserve it and must refuse package removal while any
 # domain remains. The harness removes only this exact fixture after proving both.
+sentinel="sentinel-$hash"
 sentinel_xml="$work/unmanaged-sentinel.xml"
 cat >"$sentinel_xml" <<EOF
 <domain type='qemu'>
-  <name>$inner</name>
+  <name>$sentinel</name>
+  <title>ansible-iac-role-kvm-owned</title>
   <memory unit='MiB'>256</memory>
   <vcpu>1</vcpu>
   <os><type arch='x86_64'>hvm</type></os>
@@ -304,21 +320,24 @@ cat >"$sentinel_xml" <<EOF
 EOF
 scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$sentinel_xml" "molecule@$address:/tmp/$inner-sentinel.xml"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "sudo virsh define '/tmp/$inner-sentinel.xml' && rm -f '/tmp/$inner-sentinel.xml'"
-if run_role_state "$inner" vm_absent false; then
-  printf 'FAIL: vm_absent unexpectedly accepted unmanaged sentinel %s.\n' "$inner" >&2
+  "sudo virsh define '/tmp/$inner-sentinel.xml' && rm -f '/tmp/$inner-sentinel.xml' && test ! -e '/var/lib/libvirt/images/$sentinel.ansible-iac-role-kvm-owned'"
+sentinel_uuid=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domuuid '$sentinel'")
+if run_role_state "$sentinel" vm_absent false; then
+  printf 'FAIL: vm_absent unexpectedly accepted title-spoofed unmanaged sentinel %s.\n' "$sentinel" >&2
   exit 1
 fi
-grep -Fq 'not marked as owned' "$work/$inner-vm_absent.log"
-if run_role_state "$inner" absent false; then
+grep -Fq 'role ownership manifest is missing or unsafe' "$work/$sentinel-vm_absent.log"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "test \"\$(sudo virsh domuuid '$sentinel')\" = '$sentinel_uuid' && sudo virsh dumpxml '$sentinel' | grep -Fq '<title>ansible-iac-role-kvm-owned</title>' && test ! -e '/var/lib/libvirt/images/$sentinel.ansible-iac-role-kvm-owned'"
+if run_role_state "$sentinel" absent false; then
   printf 'FAIL: state absent unexpectedly accepted a remaining domain.\n' >&2
   exit 1
 fi
-grep -Fq 'Libvirt domains remain' "$work/$inner-absent.log"
+grep -Fq 'Libvirt domains remain' "$work/$sentinel-absent.log"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "sudo virsh dominfo '$inner' >/dev/null && rpm -q qemu-kvm libvirt virt-install qemu-img lorax >/dev/null"
+  "sudo virsh dominfo '$sentinel' >/dev/null && rpm -q qemu-kvm libvirt virt-install qemu-img lorax >/dev/null"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "sudo virsh destroy '$inner' >/dev/null 2>&1 || true; sudo virsh undefine '$inner'"
+  "sudo virsh destroy '$sentinel' >/dev/null 2>&1 || true; sudo virsh undefine '$sentinel'"
 run_role_state "$inner" absent false
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "for package in qemu-kvm libvirt virt-install qemu-img lorax; do ! rpm -q \"\$package\" >/dev/null 2>&1 || exit 1; done"
