@@ -25,7 +25,7 @@ source = (
     else '''              type: "iso"\n              path: "/tmp/nested-kvm-install.iso"\n              kickstart: "/tmp/inner.ks"\n              os_variant: "rocky9"\n'''
 )
 # The image source is already configured by the ISO path; network is ISO-only.
-network = "" if len(sys.argv) == 4 else '''            network:
+network = "" if args.image_path else '''            network:
               ipv4:
                 address: "192.168.250.210/24"
                 gateway: "192.168.250.1"

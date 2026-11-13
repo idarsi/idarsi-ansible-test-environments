@@ -67,6 +67,15 @@ requirements are installed/resolved on the disposable outer guest only.
 The VM-free `tests/test-nested-kvm-renderer.sh` checks exact rendered state and
 purge options. Run it with `make check-scripts`; lifecycle runtime checks remain
 manual and must operate only inside the disposable outer guest.
+The nested harness additionally validates `state: validate` in check mode and
+requires `install`, `vm_present`, `vm_absent`, and `absent` to fail closed in
+check mode. It checks ISO removal without purge (including a no-op repeat),
+image removal with manifest-scoped purge, refusal to remove a same-name
+unmanaged sentinel domain, and refusal of `state: absent` while any domain is
+defined. Only after those refusal checks does the harness undefine its exact
+sentinel fixture; it then verifies `state: absent` removes the role's explicit
+KVM package set and that a second run succeeds idempotently. Runtime evidence
+remains pending until run on a nested-KVM-capable host.
 Missing nested virtualization support is reported as `SKIP`; once opted in,
 missing prerequisites or test failures are `FAIL`.
 The prerequisite check requires readable CPU flags exposing `vmx` with an

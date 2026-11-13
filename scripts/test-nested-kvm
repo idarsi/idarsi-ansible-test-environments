@@ -269,6 +269,18 @@ run_role_state() {
     "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook $check_mode '$playbook_dir/$name-$state.yml'" \
     2>&1 | tee "$work/$name-$state.log"
 }
+# Blueprint-only validation is supported in check mode. Every mutation state is
+# rejected by the role's preflight guard before host inspection or changes.
+run_role_state "$image_vm" validate false --check
+for mutating_state in install vm_present vm_absent absent; do
+  if run_role_state "$image_vm" "$mutating_state" false --check; then
+    printf 'FAIL: state %s unexpectedly succeeded in check mode.\n' "$mutating_state" >&2
+    exit 1
+  fi
+  grep -Fq 'mutations are not supported in check mode' "$work/$image_vm-$mutating_state.log"
+done
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$inner' >/dev/null && sudo virsh dominfo '$image_vm' >/dev/null && rpm -q qemu-kvm libvirt virt-install qemu-img lorax >/dev/null"
 iso_disk=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domblklist --details '$inner' | awk '\$2 == \"disk\" {print \$4; exit}'")
 run_role_state "$inner" vm_absent false
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "! sudo virsh dominfo '$inner' >/dev/null 2>&1 && test -f '$iso_disk'"
@@ -276,4 +288,40 @@ run_role_state "$inner" vm_absent false  # rerun must be a no-op
 "$repo_root/scripts/check-nested-kvm-idempotence" "$work/$inner-vm_absent.log"
 run_role_state "$image_vm" vm_absent true
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "! sudo virsh dominfo '$image_vm' >/dev/null 2>&1 && ! test -e '/var/lib/libvirt/images/$image_vm.ansible-iac-role-kvm-owned'"
+
+# Define an explicitly unmanaged, powered-off fixture with the same blueprint
+# name. The role must preserve it and must refuse package removal while any
+# domain remains. The harness removes only this exact fixture after proving both.
+sentinel_xml="$work/unmanaged-sentinel.xml"
+cat >"$sentinel_xml" <<EOF
+<domain type='qemu'>
+  <name>$inner</name>
+  <memory unit='MiB'>256</memory>
+  <vcpu>1</vcpu>
+  <os><type arch='x86_64'>hvm</type></os>
+  <devices><emulator>/usr/libexec/qemu-kvm</emulator></devices>
+</domain>
+EOF
+scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$sentinel_xml" "molecule@$address:/tmp/$inner-sentinel.xml"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh define '/tmp/$inner-sentinel.xml' && rm -f '/tmp/$inner-sentinel.xml'"
+if run_role_state "$inner" vm_absent false; then
+  printf 'FAIL: vm_absent unexpectedly accepted unmanaged sentinel %s.\n' "$inner" >&2
+  exit 1
+fi
+grep -Fq 'not marked as owned' "$work/$inner-vm_absent.log"
+if run_role_state "$inner" absent false; then
+  printf 'FAIL: state absent unexpectedly accepted a remaining domain.\n' >&2
+  exit 1
+fi
+grep -Fq 'Libvirt domains remain' "$work/$inner-absent.log"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$inner' >/dev/null && rpm -q qemu-kvm libvirt virt-install qemu-img lorax >/dev/null"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh destroy '$inner' >/dev/null 2>&1 || true; sudo virsh undefine '$inner'"
+run_role_state "$inner" absent false
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "for package in qemu-kvm libvirt virt-install qemu-img lorax; do ! rpm -q \"\$package\" >/dev/null 2>&1 || exit 1; done"
+run_role_state "$inner" absent false
+"$repo_root/scripts/check-nested-kvm-idempotence" "$work/$inner-absent.log"
 printf 'PASS: role %s provisioned ISO guest %s and image clone %s; both booted Rocky Linux.\n' "$role_path" "$inner" "$image_vm"
