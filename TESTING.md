@@ -25,8 +25,9 @@ Before submitting repository changes, run `make validate` and `yamllint .`.
 The setup-script checks include an isolated RHEL install-source functional test
 for versioned ISO discovery, explicit overrides, and `setup-venv` activation;
 it uses temporary files and mocked environment-creation commands, without
-network access or libvirt. Role behavior is verified by each role's own
-Molecule scenarios.
+network access or libvirt. KVM base-image sealing ownership and permission
+checks are also VM-free and use mocked commands. Role behavior is verified by
+each role's own Molecule scenarios.
 
 An explicit manual nested-KVM integration test is available on a capable KVM
 host (not part of regular tests). After `./install.sh kvm` and configuring the

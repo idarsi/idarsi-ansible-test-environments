@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source=$1
+rhel_re='[Rr][Hh][Ee][Ll][-_ /]?([0-9]+)'
+rocky_re='[Rr]ocky[-_/ ]?([0-9]+)'
+fedora_arch_re='[Ff]edora.*x86_64[-_ /]?([0-9]+)'
+fedora_re='[Ff]edora[^0-9]*([0-9]+)'
+
+if [[ "$source" == base-only:* ]]; then
+  os_key=${source#base-only:}
+  if [[ ! "$os_key" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    printf 'Invalid base-only OS key; expected a nonempty key containing only letters, digits, underscores, or hyphens.\n' >&2
+    exit 2
+  fi
+elif [[ "$source" =~ $rhel_re ]]; then
+  os_key="rhel${BASH_REMATCH[1]}"
+elif [[ "$source" =~ $rocky_re ]]; then
+  os_key="rocky${BASH_REMATCH[1]}"
+elif [[ "$source" =~ $fedora_arch_re ]]; then
+  os_key="fedora${BASH_REMATCH[1]}"
+elif [[ "$source" =~ $fedora_re ]]; then
+  os_key="fedora${BASH_REMATCH[1]}"
+else
+  os_key=$(basename "$source" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_-' | cut -c1-26)
+fi
+
+# kvm-base-image prefixes this key with "base-" and adds a hyphen plus the
+# eight-character kickstart hash when naming the Molecule instance.
+printf '%s' "${os_key:0:26}"
