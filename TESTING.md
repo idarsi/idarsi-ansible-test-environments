@@ -29,6 +29,38 @@ network access or libvirt. KVM base-image sealing ownership and permission
 checks are also VM-free and use mocked commands. Role behavior is verified by
 each role's own Molecule scenarios.
 
+To repair an existing environment's Fedora 44 activation hook without rebuilding
+it or installing dependencies, run:
+
+```bash
+scripts/setup-venv --refresh-activation ansible-current
+source .venv/ansible-current/bin/activate
+```
+
+The same command accepts `ansible-min` and `ansible-next`. It requires an
+existing regular, non-symlink `bin/activate` and updates only its delimited
+Fedora block, preserving everything outside it (including local integration
+exports). Missing activation files and malformed or duplicate markers fail
+without modification. Repeated refreshes are byte-for-byte idempotent.
+Updates use an atomic rename and preserve activation-file permissions.
+Activation reads `.kvm-install-source-fedora44` as literal single-line data
+(including spaces and a missing final newline), only when
+`IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44` is unset or empty; explicit nonempty
+overrides win. Normal environment creation installs the same hook.
+
+The VM-free `bash tests/test-setup-venv-refresh.sh` fixture check covers all
+three profiles, preservation, idempotence, replacement, literal data and
+overrides, and invalid-file/marker rejection without touching real `.venv`
+directories. It is also included in `make check-scripts`. Real activation and
+TUI-equivalent KVM verification remain separate runtime checks.
+
+VM-free cleanup fixtures (`test-kvm-destroy-overlay.sh`,
+`test-kvm-explicit-disk.sh`, `test-kvm-overlay-cleanup.sh`, and
+`test-kvm-base-image-ownership.sh` under `tests/`) cover paused guests and
+preservation of storage on libvirt query, stop, or undefine failures. Cleanup
+requires matching UUID ownership and verified removal before deleting storage;
+uncertain failures retain storage and recovery files for manual inspection.
+
 An explicit manual nested-KVM integration test is available on a capable KVM
 host (not part of regular tests). After `./install.sh kvm` and configuring the
 Rocky 10 ISO and the KVM role checkout, run

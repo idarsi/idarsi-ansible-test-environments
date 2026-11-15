@@ -106,4 +106,37 @@ if "$tmp/scenario/scripts/kvm-vm" create image-test "$iso" "$kickstart" >"$tmp/o
   echo 'Expected create-path qemu-img failure' >&2; exit 1
 fi
 [[ ! -e $overlay ]]
+unset QEMU_FAIL
+
+# Once virt-install has attempted a domain, libvirt failures must preserve its
+# overlay rather than treating the failed installation as proof of absence.
+printf '#!/usr/bin/env bash\nexit 0\n' >"$tmp/bin/virt-customize"
+cat >"$tmp/bin/virt-install" <<'SH'
+#!/usr/bin/env bash
+while (($#)); do
+  if [[ $1 == --uuid ]]; then echo "$2" >"$CALL_LOG.uuid"; break; fi
+  shift
+done
+exit 1
+SH
+cat >"$tmp/bin/virsh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *dominfo*) exit 1 ;;
+  *net-info*) echo 'Active: yes' ;;
+  *domuuid*) [[ $FAILURE != query ]] || exit 1; cat "$CALL_LOG.uuid" ;;
+  *domstate*) echo paused ;;
+  *destroy*) exit 1 ;;
+  *undefine*) exit 99 ;;
+esac
+SH
+printf '#!/usr/bin/env bash\n/usr/bin/sleep 0.05\n' >"$tmp/bin/sleep"
+chmod +x "$tmp/bin/sleep"
+for FAILURE in query destroy; do
+  export FAILURE
+  if run_image; then echo 'Expected failed installation' >&2; exit 1; fi
+  [[ -e $overlay ]]
+  grep -q 'preserving storage' "$tmp/out"
+  rm "$overlay"
+done
 echo 'KVM overlay cleanup checks passed.'

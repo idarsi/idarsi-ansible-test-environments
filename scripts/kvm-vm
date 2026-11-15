@@ -48,8 +48,22 @@ read_owned_uuid() {
 
 domain_is_absent() {
   local output=$1
-  grep -Eiq '(^|[[:space:]])(Domain not found|no domain with matching (name|uuid)|domain .* not found)(:|[[:space:]]|$)' <<<"$output" \
-    || grep -Fqx "error: failed to get domain '$domain'" <<<"$output"
+  grep -Eiq '(^|[[:space:]])(Domain not found|no domain with matching (name|uuid)|domain .* not found)(:|[[:space:]]|$)' <<<"$output"
+}
+
+remove_owned_domain() {
+  local uuid=$1 state
+  state=$(LC_ALL=C "${virsh_cmd[@]}" domstate "$uuid" 2>&1) || return 1
+  if [[ $state != 'shut off' && $state != shutoff ]]; then
+    "${virsh_cmd[@]}" destroy "$uuid" || return 1
+    state=$(LC_ALL=C "${virsh_cmd[@]}" domstate "$uuid" 2>&1) || return 1
+    [[ $state == 'shut off' || $state == shutoff ]] || return 1
+  fi
+  "${virsh_cmd[@]}" undefine "$uuid" || return 1
+  if state=$(LC_ALL=C "${virsh_cmd[@]}" domstate "$uuid" 2>&1); then
+    return 1
+  fi
+  domain_is_absent "$state"
 }
 
 case "$action" in
@@ -89,9 +103,7 @@ case "$action" in
     if dominfo_output=$("${virsh_cmd[@]}" dominfo "$domain" 2>&1); then
       domain_uuid=$("${virsh_cmd[@]}" domuuid "$domain") || exit 1
       [[ ${domain_uuid,,} == "$owned_uuid" ]] || { printf 'VM %s UUID does not match its ownership marker; refusing cleanup.\n' "$domain" >&2; exit 1; }
-      state=$("${virsh_cmd[@]}" domstate "$owned_uuid") || exit 1
-      if [[ $state == running ]]; then "${virsh_cmd[@]}" destroy "$owned_uuid" || { printf 'Unable to stop VM %s; preserving marker and overlay.\n' "$domain" >&2; exit 1; }; fi
-      "${virsh_cmd[@]}" undefine "$owned_uuid" || { printf 'Unable to undefine VM %s; preserving marker and overlay.\n' "$domain" >&2; exit 1; }
+      remove_owned_domain "$owned_uuid" || { printf 'Unable to verify VM %s removal; preserving marker and overlay.\n' "$domain" >&2; exit 1; }
     elif domain_is_absent "$dominfo_output"; then
       printf 'VM %s is absent but its ownership marker remains; preserving resources.\n' "$domain" >&2
       exit 1
@@ -341,13 +353,20 @@ PY
     explicit_domain_cleanup=true
     explicit_domain_uuid=$invocation_uuid
     virt_install_pid=
+    virt_install_attempted=false
     cleanup_invocation_domain() {
       local actual_uuid
+      [[ $virt_install_attempted == true ]] || return 0
       [[ $explicit_domain_cleanup == true && -n $explicit_domain_uuid ]] || return 0
-      actual_uuid=$("${virsh_cmd[@]}" domuuid "$domain" 2>/dev/null) || return 0
-      [[ ${actual_uuid,,} == ${explicit_domain_uuid,,} ]] || return 0
-      "${virsh_cmd[@]}" destroy "$explicit_domain_uuid" >/dev/null 2>&1 || true
-      "${virsh_cmd[@]}" undefine "$explicit_domain_uuid" >/dev/null 2>&1 || true
+      if ! actual_uuid=$(LC_ALL=C "${virsh_cmd[@]}" domuuid "$domain" 2>&1); then
+        domain_is_absent "$actual_uuid" || return 1
+        # Verify the invocation UUID too: a domain may have been renamed.
+        if actual_uuid=$(LC_ALL=C "${virsh_cmd[@]}" domstate "$explicit_domain_uuid" 2>&1); then return 1; fi
+        domain_is_absent "$actual_uuid"
+        return
+      fi
+      [[ ${actual_uuid,,} == ${explicit_domain_uuid,,} ]] || return 1
+      remove_owned_domain "$explicit_domain_uuid"
     }
     stop_virt_install() {
       if [[ -n "$virt_install_pid" ]]; then
@@ -362,7 +381,10 @@ PY
       stop_virt_install
       # The invocation UUID proves ownership; a same-name collision is never
       # sufficient reason to destroy or undefine a domain.
-      cleanup_invocation_domain
+      if ! cleanup_invocation_domain; then
+        printf 'Unable to verify invocation VM removal; preserving storage and recovery files.\n' >&2
+        return
+      fi
       # As with overlays, ln publication precedes setting the flag. The
       # staging hard link is evidence of ownership during that short window.
       if [[ $explicit_disk_owned == true || ( -n ${explicit_disk_tmp:-} && -e $explicit_disk_path && -e $explicit_disk_tmp && $explicit_disk_path -ef $explicit_disk_tmp ) ]]; then
@@ -440,6 +462,7 @@ PY
     elif [[ $image_mode != true ]]; then
       virt_install_args+=(--location "$install_source" --initrd-inject "$rendered_kickstart" --extra-args "inst.ks=file:/$(basename "$rendered_kickstart") console=ttyS0,115200n8" --wait "$virt_install_wait_minutes")
     fi
+    virt_install_attempted=true
     virt-install "${virt_install_args[@]}" >"$install_log" 2>&1 &
     virt_install_pid=$!
     last_progress_notice=$SECONDS
@@ -458,15 +481,6 @@ PY
       virt_install_pid=
       printf 'virt-install failed. Install log: %s\n' "$install_log" >&2
       cat "$install_log" >&2
-      if [[ $explicit_disk_owned == true ]]; then
-        cleanup_invocation_domain
-        rm -f -- "$explicit_disk_path"
-      else
-        cleanup_invocation_domain
-        if [[ $image_mode == true || "$base_mode" == auto ]]; then
-          rm -f -- "$overlay"
-        fi
-      fi
       exit 1
     fi
 
@@ -478,12 +492,6 @@ PY
         if [[ "$guest_state" != running ]]; then
           printf 'VM %s stopped before SSH became ready (state: %s). Install log: %s\n' \
             "$domain" "${guest_state:-unknown}" "$install_log" >&2
-          if [[ $explicit_disk_owned == true ]]; then
-            cleanup_invocation_domain
-            rm -f -- "$explicit_disk_path"
-          else
-            cleanup_invocation_domain
-          fi
           exit 1
         fi
         if [[ -z "$address" ]]; then
@@ -507,15 +515,6 @@ PY
       -o UserKnownHostsFile=/dev/null "$ssh_user@$address" true >/dev/null 2>&1; then
       printf 'VM %s did not become SSH-ready within %s seconds. Install log: %s\n' "$domain" "$timeout_seconds" "$install_log" >&2
       cat "$install_log" >&2
-      if [[ $explicit_disk_owned == true ]]; then
-        cleanup_invocation_domain
-        rm -f -- "$explicit_disk_path"
-      else
-        cleanup_invocation_domain
-        if [[ $image_mode == true || "$base_mode" == auto ]]; then
-          rm -f -- "$overlay"
-        fi
-      fi
       exit 1
     fi
     domain_uuid=$("${virsh_cmd[@]}" domuuid "$domain")

@@ -27,6 +27,7 @@ SH
 cat >"$bin/virt-install" <<'SH'
 #!/usr/bin/env bash
 printf 'virt-install %s\n' "$*" >>"$CALL_LOG"
+rm -f "$DOMAIN_UUID_FILE.stopped" "$DOMAIN_UUID_FILE.absent"
 while (($#)); do
   if [[ $1 == --uuid ]]; then printf '%s\n' "$2" >"$DOMAIN_UUID_FILE"; break; fi
   shift
@@ -62,9 +63,13 @@ case "$*" in
     count=$((count + 1)); printf '%s' "$count" >"$DOMINFO_COUNT"
     if ((count == 1)); then exit 1; else exit 0; fi
     ;;
-  *domuuid*) printf '%s\n' "${MOCK_DOMAIN_UUID:-$(cat "$DOMAIN_UUID_FILE" 2>/dev/null || printf 00000000-0000-0000-0000-000000000001)}";;
+  *domuuid*) [[ ${QUERY_FAIL:-0} == 0 ]] || exit 1; printf '%s\n' "${MOCK_DOMAIN_UUID:-$(cat "$DOMAIN_UUID_FILE" 2>/dev/null || printf 00000000-0000-0000-0000-000000000001)}";;
   *net-info*) printf 'Active: yes\n';;
-  *domstate*) printf 'running\n';;
+  *domstate*)
+    if [[ -e $DOMAIN_UUID_FILE.absent ]]; then echo 'error: Domain not found' >&2; exit 1; fi
+    if [[ -e $DOMAIN_UUID_FILE.stopped ]]; then echo 'shut off'; else echo "${DOMAIN_STATE:-running}"; fi ;;
+  *destroy*) [[ ${DESTROY_FAIL:-0} == 0 ]] || exit 1; touch "$DOMAIN_UUID_FILE.stopped" ;;
+  *undefine*) [[ ${UNDEFINE_FAIL:-0} == 0 ]] || exit 1; touch "$DOMAIN_UUID_FILE.absent" ;;
   *domifaddr*) printf 'vnet0 52:54  ipv4 192.0.2.2/24\n';;
   *) exit 0 ;;
 esac
@@ -111,6 +116,22 @@ grep -q "^virsh --connect qemu:///system destroy $explicit_uuid$" "$CALL_LOG"
 grep -q "^virsh --connect qemu:///system undefine $explicit_uuid$" "$CALL_LOG"
 ! grep -q -- '--remove-all-storage' "$CALL_LOG"
 ! grep -Eq '^virsh .* (destroy|undefine) molecule-' "$CALL_LOG"
+
+# Failed cleanup must leave the explicit disk intact, including query errors
+# and foreign UUIDs. A paused owned guest must be stopped before unlinking.
+for failure in DESTROY_FAIL QUERY_FAIL UNDEFINE_FAIL MOCK_DOMAIN_UUID; do
+  export "$failure=1"
+  rm -f "$DOMINFO_COUNT"
+  if "$repo_root/scripts/kvm-vm" create vm "$tmp/installer.iso" "$repo_root/examples/molecule-kvm/fedora-44.ks.tmpl" >"$tmp/out" 2>&1; then exit 1; fi
+  [[ -e $KVM_DISK_PATH ]]
+  rm "$KVM_DISK_PATH"
+  unset "$failure"
+done
+export DOMAIN_STATE=paused
+rm -f "$DOMINFO_COUNT"
+if "$repo_root/scripts/kvm-vm" create vm "$tmp/installer.iso" "$repo_root/examples/molecule-kvm/fedora-44.ks.tmpl" >"$tmp/out" 2>&1; then exit 1; fi
+[[ ! -e $KVM_DISK_PATH ]]
+unset DOMAIN_STATE
 
 export EXPECT_EXPLICIT=0
 unset KVM_DISK_PATH

@@ -15,13 +15,17 @@ cat >"$tmp/bin/virsh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$VIRSH_LOG"
 case ${VIRSH_MODE:?}:$* in
-  absent:*dominfo*) echo "error: failed to get domain '$DOMAIN'" >&2; exit 1 ;;
+  absent:*dominfo*) echo 'error: Domain not found' >&2; exit 1 ;;
   connection:*dominfo*) echo 'error: failed to connect to hypervisor' >&2; exit 1 ;;
   present:*dominfo*) echo 'Name: test' ;;
   present:*domuuid*) echo "${DOMAIN_UUID:-11111111-1111-4111-8111-111111111111}" ;;
-  present:*domstate*) echo "${DOMAIN_STATE:-running}" ;;
-  present:*destroy*) [[ ${DESTROY_FAIL:-0} == 0 ]] ;;
-  present:*undefine*) [[ ${UNDEFINE_FAIL:-0} == 0 ]] ;;
+  present:*domstate*)
+    [[ ${QUERY_FAIL:-0} == 0 ]] || exit 1
+    if [[ ${POST_QUERY_FAIL:-0} == 1 && -e $VIRSH_LOG.absent ]]; then exit 1; fi
+    if [[ -e $VIRSH_LOG.absent ]]; then echo 'error: Domain not found' >&2; exit 1; fi
+    if [[ -e $VIRSH_LOG.stopped ]]; then echo 'shut off'; else echo "${DOMAIN_STATE:-running}"; fi ;;
+  present:*destroy*) [[ ${DESTROY_FAIL:-0} == 0 ]] || exit 1; touch "$VIRSH_LOG.stopped" ;;
+  present:*undefine*) [[ ${UNDEFINE_FAIL:-0} == 0 ]] || exit 1; touch "$VIRSH_LOG.absent" ;;
   *) echo "Unexpected virsh command: $*" >&2; exit 99 ;;
 esac
 SH
@@ -98,9 +102,22 @@ export UNDEFINE_FAIL=1
 fail_destroy
 [[ -e $marker && -e $overlay ]]
 unset UNDEFINE_FAIL
+rm -f "$VIRSH_LOG.stopped"
+export QUERY_FAIL=1
+fail_destroy
+[[ -e $marker && -e $overlay ]]
+unset QUERY_FAIL
+
+# Even a successful undefine is insufficient if absence cannot be verified.
+export POST_QUERY_FAIL=1
+fail_destroy
+[[ -e $marker && -e $overlay ]]
+unset POST_QUERY_FAIL
+rm -f "$VIRSH_LOG.stopped" "$VIRSH_LOG.absent"
 
 # Matching ownership removes exactly the role overlay only after undefine.
 : >"$VIRSH_LOG"
+export DOMAIN_STATE=paused
 run_destroy
 [[ ! -e $marker && ! -e $overlay ]]
 grep -q ' destroy 11111111-1111-4111-8111-111111111111$' "$VIRSH_LOG"
