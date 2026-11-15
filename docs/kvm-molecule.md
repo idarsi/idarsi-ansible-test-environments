@@ -199,3 +199,34 @@ public key), and boots it with `virt-install --import`. The source image is
 never modified or removed. Do not combine `image_path` with a nonempty
 `install_source`. This import path is opt-in/manual; it does not replace ISO
 installation coverage.
+
+For an existing prepared base, an optional platform `image_cache` mapping
+enables read-only lookup when `image_path` is omitted or empty:
+
+```yaml
+platforms:
+  - name: rocky9-image
+    image_path: "${MOLECULE_KVM_IMAGE_PATH:-}"
+    image_cache:
+      os_key: "rocky9"
+      kickstart: "${IDARSI_TEST_ENVIRONMENT}/examples/molecule-kvm/rocky9-10.ks.tmpl"
+      ssh_user: "molecule"
+      disk_size_gb: 30
+```
+
+All four cache identity fields are required; relative Kickstart paths resolve
+against the scenario directory. Lookup uses `kvm-base-image find` with argv,
+the template hash and current cache revision, selecting the first readable,
+nonempty regular match in C-locale filename order. It never builds, ensures,
+repairs, or downloads an image. Missing templates or compatible images fail
+before any VM actions; prepare the cache separately. All platform image inputs
+are resolved before provisioning begins.
+
+A nonempty explicit `image_path` always wins and retains platform `ssh_user`
+(default `molecule`); invalid explicit paths fail without cache fallback.
+Cache-selected images instead use `image_cache.ssh_user` for customization,
+SSH readiness, and Molecule connection details, even when platform `ssh_user`
+differs. Do not combine either image selector with a nonempty `install_source`.
+An empty `image_path` without cache metadata fails clearly. Existing ISO-only
+platforms remain unchanged. Molecule (including direct TUI invocation) performs
+this resolution itself; no TUI-side cache preparation is needed.

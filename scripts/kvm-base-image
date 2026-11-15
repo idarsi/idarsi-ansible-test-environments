@@ -23,15 +23,15 @@ find_base() {
     printf 'Invalid OS key for KVM base-image lookup: %s\n' "$os_key" >&2
     return 2
   }
-  [[ -r "$kickstart" ]] || return 1
+  [[ -f "$kickstart" && -r "$kickstart" ]] || return 1
   kickstart_hash=$(sha256sum "$kickstart" | awk '{print $1}')
   filename_pattern="${os_key}-${disk_size}-${ssh_user}-${kickstart_hash:0:16}-*-r${revision}.qcow2"
   # Match only basenames beneath base_dir: neither glob metacharacters in the
   # configured directory nor slashes in other filename fields can escape it.
-  mapfile -d '' matches < <(find "$base_dir" -maxdepth 1 -type f -name "$filename_pattern" -print0 2>/dev/null)
+  mapfile -d '' matches < <(find "$base_dir" -maxdepth 1 -type f -name "$filename_pattern" -print0 2>/dev/null | LC_ALL=C sort -z)
   ((${#matches[@]})) || return 1
   for candidate in "${matches[@]}"; do
-    [[ -s "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
+    [[ -f "$candidate" && -r "$candidate" && -s "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
   done
   return 1
 }

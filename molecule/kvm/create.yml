@@ -16,12 +16,16 @@
           - molecule_config.platforms | length > 0
           - test_environment | length > 0
 
-    - name: Reject platforms that combine image and ISO installation inputs
-      ansible.builtin.assert:
-        that:
-          - not (item.image_path is defined and item.install_source is defined and (item.install_source | string | length > 0))
-        fail_msg: "Platform {{ item.name }} must use either image_path or install_source, not both."
+    - name: Initialize resolved platform records
+      ansible.builtin.set_fact:
+        molecule_kvm_platforms: []
+
+    - name: Resolve every platform before any VM actions
+      ansible.builtin.include_tasks: resolve-platform.yml
       loop: "{{ molecule_config.platforms }}"
+      loop_control:
+        loop_var: platform
+        label: "{{ platform.name }}"
 
     - name: Provision all configured guests
       block:
@@ -42,7 +46,7 @@
             KVM_VCPUS: "{{ item.vcpus | default(2) }}"
             KVM_DISK_SIZE_GB: "{{ item.disk_size_gb | default(30) }}"
             KVM_INSTALL_TIMEOUT: "{{ item.install_timeout | default(3600) }}"
-          loop: "{{ molecule_config.platforms }}"
+          loop: "{{ molecule_kvm_platforms }}"
           loop_control:
             label: "{{ item.name }}"
           async: "{{ 2 * (item.install_timeout | default(3600) | int) + 900 }}"

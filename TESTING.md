@@ -5,6 +5,16 @@ Idarsi Ansible role repositories. The shared controller venv supports two
 target backends: Podman for fast tests and KVM + Kickstart for full virtual
 machines. Role-specific scenarios and tests remain in each role repository.
 
+Run `bash tests/test-kvm-image-cache.sh` from an activated shared environment
+for VM-free image-cache selection tests. It invokes the real create playbook
+with isolated launcher mocks and checks empty-path fallback, explicit-path
+precedence, effective guest account and instance configuration, missing cache
+and invalid metadata rejection before any VM actions, and ISO compatibility.
+It also checks deterministic real cache lookup using temporary file fixtures
+and is included in `make check-scripts`.
+`bash tests/test-kvm-ssh-user-forwarding.sh` covers explicit-image account
+forwarding. These focused checks do not replace runtime KVM/SELinux verification.
+
 | Ansible environment | ansible-core | ansible-lint | Python | Typical use |
 | --- | --- | --- | --- | --- |
 | `ansible-min` | 2.15.13 | 6.22.2 | 3.9 | Minimum supported line |
