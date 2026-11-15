@@ -121,7 +121,11 @@ exit 1
 SH
 cat >"$tmp/bin/virsh" <<'SH'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"$CALL_LOG.virsh"
 case "$*" in
+  *list*)
+    [[ $FAILURE != query ]] || exit 1
+    if [[ ${*: -1} == --uuid ]]; then cat "$CALL_LOG.uuid"; else echo retained-domain; fi ;;
   *dominfo*) exit 1 ;;
   *net-info*) echo 'Active: yes' ;;
   *domuuid*) [[ $FAILURE != query ]] || exit 1; cat "$CALL_LOG.uuid" ;;
@@ -134,9 +138,19 @@ printf '#!/usr/bin/env bash\n/usr/bin/sleep 0.05\n' >"$tmp/bin/sleep"
 chmod +x "$tmp/bin/sleep"
 for FAILURE in query destroy; do
   export FAILURE
+  : >"$CALL_LOG.virsh"
   if run_image; then echo 'Expected failed installation' >&2; exit 1; fi
   [[ -e $overlay ]]
   grep -q 'preserving storage' "$tmp/out"
+  if [[ $FAILURE == query ]]; then
+    grep -q ' list --all --name$' "$CALL_LOG.virsh"
+    if grep -Eq ' (destroy|undefine) ' "$CALL_LOG.virsh"; then
+      echo 'Unexpected domain destruction after failed query' >&2
+      exit 1
+    fi
+  else
+    grep -q ' destroy ' "$CALL_LOG.virsh"
+  fi
   rm "$overlay"
 done
 echo 'KVM overlay cleanup checks passed.'

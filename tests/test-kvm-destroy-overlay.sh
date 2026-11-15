@@ -15,7 +15,15 @@ cat >"$tmp/bin/virsh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$VIRSH_LOG"
 case ${VIRSH_MODE:?}:$* in
-  absent:*dominfo*) echo 'error: Domain not found' >&2; exit 1 ;;
+  *:*list*)
+    [[ $VIRSH_MODE != connection && ${LIST_FAIL:-} != "${*: -1}" ]] || exit 1
+    if [[ ${POST_QUERY_FAIL:-0} == 1 && -e $VIRSH_LOG.absent ]]; then exit 1; fi
+    if [[ $VIRSH_MODE == absent || -e $VIRSH_LOG.absent ]]; then
+      [[ ${RENAMED:-0} == 1 && ${*: -1} == --uuid ]] && echo 11111111-1111-4111-8111-111111111111
+      exit 0
+    fi
+    if [[ ${*: -1} == --name ]]; then echo "$DOMAIN"; else echo "${DOMAIN_UUID:-11111111-1111-4111-8111-111111111111}"; fi ;;
+  absent:*dominfo*) echo "error: failed to get domain '${*: -1}'" >&2; exit 1 ;;
   connection:*dominfo*) echo 'error: failed to connect to hypervisor' >&2; exit 1 ;;
   present:*dominfo*) echo 'Name: test' ;;
   present:*domuuid*) echo "${DOMAIN_UUID:-11111111-1111-4111-8111-111111111111}" ;;
@@ -39,6 +47,8 @@ run_destroy() { "$tmp/scenario/scripts/kvm-vm" destroy cleanup >"$tmp/out" 2>&1;
 fail_destroy() { if run_destroy; then echo 'Expected destroy failure' >&2; exit 1; fi; }
 
 # Rescue cleanup is idempotent only when all owned resources are absent.
+export VIRSH_MODE=connection
+fail_destroy
 export VIRSH_MODE=absent
 run_destroy
 printf 'foreign overlay\n' >"$overlay"
@@ -52,16 +62,24 @@ export VIRSH_MODE=present
 fail_destroy
 ! grep -Eq ' (destroy|undefine) ' "$VIRSH_LOG"
 
-# A valid ownership marker is not enough to claim a domain that is absent;
-# preserve the marker and overlay so disappearance cannot erase evidence.
+# A validated marker permits rerun cleanup only when both identities are absent.
 printf '11111111-1111-4111-8111-111111111111\n' >"$marker"
 printf 'owned overlay\n' >"$overlay"
 export VIRSH_MODE=absent
 : >"$VIRSH_LOG"
+for failure in --name --uuid; do
+  export LIST_FAIL=$failure
+  fail_destroy
+  [[ -e $marker && -e $overlay ]]
+done
+unset LIST_FAIL
+export RENAMED=1
 fail_destroy
 [[ -e $marker && -e $overlay ]]
+unset RENAMED
+run_destroy
+[[ ! -e $marker && ! -e $overlay ]]
 ! grep -Eq ' (destroy|undefine) ' "$VIRSH_LOG"
-rm "$marker" "$overlay"
 
 # Marker values and symlinks are validated before destructive operations.
 export VIRSH_MODE=present
@@ -95,6 +113,7 @@ done
 # Stop and undefine failures preserve ownership evidence and storage.
 printf '11111111-1111-4111-8111-111111111111\n' >"$marker"
 export DESTROY_FAIL=1
+export DOMAIN_STATE=paused
 fail_destroy
 [[ -e $marker && -e $overlay ]]
 unset DESTROY_FAIL

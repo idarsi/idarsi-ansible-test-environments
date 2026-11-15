@@ -47,8 +47,14 @@ read_owned_uuid() {
 }
 
 domain_is_absent() {
-  local output=$1
-  grep -Eiq '(^|[[:space:]])(Domain not found|no domain with matching (name|uuid)|domain .* not found)(:|[[:space:]]|$)' <<<"$output"
+  local uuid=$1 names uuids
+  names=$(LC_ALL=C "${virsh_cmd[@]}" list --all --name) || return 1
+  if grep -Fxq -- "$domain" <<<"$names"; then return 1; fi
+  if [[ -n $uuid ]]; then
+    uuids=$(LC_ALL=C "${virsh_cmd[@]}" list --all --uuid) || return 1
+    if grep -Fxiq -- "$uuid" <<<"$uuids"; then return 1; fi
+  fi
+  return 0
 }
 
 remove_owned_domain() {
@@ -60,10 +66,7 @@ remove_owned_domain() {
     [[ $state == 'shut off' || $state == shutoff ]] || return 1
   fi
   "${virsh_cmd[@]}" undefine "$uuid" || return 1
-  if state=$(LC_ALL=C "${virsh_cmd[@]}" domstate "$uuid" 2>&1); then
-    return 1
-  fi
-  domain_is_absent "$state"
+  domain_is_absent "$uuid"
 }
 
 case "$action" in
@@ -89,9 +92,7 @@ case "$action" in
     overlay=$base_dir/${domain}.qcow2
     if [[ -L $ownership_marker ]]; then printf 'VM ownership marker is a symlink; refusing cleanup.\n' >&2; exit 1; fi
     if [[ ! -e $ownership_marker ]]; then
-      if dominfo_output=$("${virsh_cmd[@]}" dominfo "$domain" 2>&1); then
-        printf 'VM %s exists without an ownership marker; refusing cleanup.\n' "$domain" >&2; exit 1
-      elif domain_is_absent "$dominfo_output" && [[ ! -e $overlay && ! -L $overlay ]]; then
+      if domain_is_absent '' && [[ ! -e $overlay && ! -L $overlay ]]; then
         printf 'Destroyed %s (%s) if it existed.\n' "$instance" "$domain"
         exit 0
       else
@@ -104,9 +105,8 @@ case "$action" in
       domain_uuid=$("${virsh_cmd[@]}" domuuid "$domain") || exit 1
       [[ ${domain_uuid,,} == "$owned_uuid" ]] || { printf 'VM %s UUID does not match its ownership marker; refusing cleanup.\n' "$domain" >&2; exit 1; }
       remove_owned_domain "$owned_uuid" || { printf 'Unable to verify VM %s removal; preserving marker and overlay.\n' "$domain" >&2; exit 1; }
-    elif domain_is_absent "$dominfo_output"; then
-      printf 'VM %s is absent but its ownership marker remains; preserving resources.\n' "$domain" >&2
-      exit 1
+    elif domain_is_absent "$owned_uuid"; then
+      : # A validated marker and both absent identities permit rerun cleanup.
     else
       printf 'Unable to query VM %s; preserving its overlay. virsh dominfo failed: %s\n' "$domain" "$dominfo_output" >&2
       exit 1
@@ -359,10 +359,8 @@ PY
       [[ $virt_install_attempted == true ]] || return 0
       [[ $explicit_domain_cleanup == true && -n $explicit_domain_uuid ]] || return 0
       if ! actual_uuid=$(LC_ALL=C "${virsh_cmd[@]}" domuuid "$domain" 2>&1); then
-        domain_is_absent "$actual_uuid" || return 1
-        # Verify the invocation UUID too: a domain may have been renamed.
-        if actual_uuid=$(LC_ALL=C "${virsh_cmd[@]}" domstate "$explicit_domain_uuid" 2>&1); then return 1; fi
-        domain_is_absent "$actual_uuid"
+        # Check both identities: the invocation domain may have been renamed.
+        domain_is_absent "$explicit_domain_uuid"
         return
       fi
       [[ ${actual_uuid,,} == ${explicit_domain_uuid,,} ]] || return 1

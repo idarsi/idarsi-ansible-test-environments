@@ -58,6 +58,10 @@ cat >"$bin/virsh" <<'SH'
 #!/usr/bin/env bash
 printf 'virsh %s\n' "$*" >>"$CALL_LOG"
 case "$*" in
+  *list*)
+    [[ ${QUERY_FAIL:-0} == 0 ]] || exit 1
+    [[ -e $DOMAIN_UUID_FILE.absent ]] && exit 0
+    if [[ ${*: -1} == --uuid ]]; then cat "$DOMAIN_UUID_FILE"; else echo retained-domain; fi ;;
   *dominfo*)
     count=$(cat "$DOMINFO_COUNT" 2>/dev/null || printf 0)
     count=$((count + 1)); printf '%s' "$count" >"$DOMINFO_COUNT"

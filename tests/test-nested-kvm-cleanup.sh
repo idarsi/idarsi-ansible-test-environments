@@ -9,19 +9,37 @@ cat >"$tmp/bin/virsh" <<'SH'
 #!/usr/bin/env bash
 [[ ${1:-} == --connect ]] && shift 2
 case ${1:-} in
+  list)
+    case $(cat "$DOMAIN_STATE") in
+      absent) exit 0 ;;
+      error) printf 'error: failed to connect to the hypervisor\n' >&2; exit 1 ;;
+      *) if [[ ${3:-} == --uuid ]]; then echo 11111111-1111-4111-8111-111111111111; else echo "$LIBVIRT_DOMAIN"; fi ;;
+    esac
+    ;;
   dominfo)
     case $(cat "$DOMAIN_STATE") in
-      present) exit 0 ;;
-      absent) printf 'error: Domain not found: no domain with matching name\n' >&2; exit 1 ;;
+      present|stopped) exit 0 ;;
+      absent) printf "error: failed to get domain '%s'\n" "$2" >&2; exit 1 ;;
       error) printf 'error: failed to connect to the hypervisor\n' >&2; exit 1 ;;
       *) exit 2 ;;
     esac
     ;;
   domuuid) printf '11111111-1111-4111-8111-111111111111\n' ;;
-  domstate) printf 'running\n' ;;
-  destroy) exit 0 ;;
-  undefine)
+  domstate)
+    case $(cat "$DOMAIN_STATE") in
+      present) printf 'running\n' ;;
+      stopped) printf 'shut off\n' ;;
+      absent) printf "error: failed to get domain '%s'\n" "$2" >&2; exit 1 ;;
+      error) printf 'error: failed to connect to the hypervisor\n' >&2; exit 1 ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  destroy)
     if [[ ${DESTROY_FAIL:-0} == 1 ]]; then exit 1; fi
+    printf stopped >"$DOMAIN_STATE"
+    ;;
+  undefine)
+    if [[ ${UNDEFINE_FAIL:-0} == 1 ]]; then exit 1; fi
     printf absent >"$DOMAIN_STATE"
     ;;
   *) printf 'Unexpected virsh command: %s\n' "$*" >&2; exit 1 ;;
@@ -34,6 +52,7 @@ mkdir "$work"
 hash=$(printf '%s' "$work" | sha256sum | cut -c1-8)
 domain="nested-kvm-$hash"
 credentials="$work/credentials/molecule"
+export LIBVIRT_DOMAIN="molecule-${domain}-$(printf '%s' "$credentials" | sha256sum | cut -c1-8)"
 mkdir -p "$credentials"
 disk="$work/$domain.qcow2"
 
@@ -58,15 +77,17 @@ if "$root/scripts/cleanup-nested-kvm" nested-kvm-deadbeef qemu:///system "$disk"
 fi
 [[ -f $tmp/unrelated/keep && -d $tmp/unrelated ]]
 
-printf present >"$DOMAIN_STATE"
-touch "$disk"
-printf '11111111-1111-4111-8111-111111111111\n' >"$credentials/kvm-$domain.uuid"
-if DESTROY_FAIL=1 "$root/scripts/cleanup-nested-kvm" "$domain" qemu:///system "$disk" "$work" >"$tmp/out" 2>&1; then
-  echo 'Expected failed destroy to fail cleanup.' >&2
-  exit 1
-fi
-[[ -f $disk && -d $work ]]
-grep -q "preserving disk and work directory at $work" "$tmp/out" || { cat "$tmp/out"; exit 1; }
+for failure in DESTROY_FAIL UNDEFINE_FAIL; do
+  printf present >"$DOMAIN_STATE"
+  touch "$disk"
+  printf '11111111-1111-4111-8111-111111111111\n' >"$credentials/kvm-$domain.uuid"
+  if env "$failure=1" "$root/scripts/cleanup-nested-kvm" "$domain" qemu:///system "$disk" "$work" >"$tmp/out" 2>&1; then
+    echo "Expected $failure to fail cleanup." >&2
+    exit 1
+  fi
+  [[ -f $disk && -d $work ]]
+  grep -q "preserving disk and work directory at $work" "$tmp/out" || { cat "$tmp/out"; exit 1; }
+done
 
 printf present >"$DOMAIN_STATE"
 touch "$disk"
