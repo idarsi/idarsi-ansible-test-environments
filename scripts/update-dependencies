@@ -5,11 +5,11 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 versions="$repo_root/versions.yml"
 command -v yq >/dev/null || { printf 'yq is required to update dependency pins\n' >&2; exit 1; }
 
-ansible_posix=$(yq -r '.collections.ansible_posix' "$versions")
 containers_podman=$(yq -r '.collections.containers_podman' "$versions")
 
 for environment in ansible-min ansible-current ansible-next; do
   key=${environment#ansible-}
+  ansible_posix=$(yq -r ".collections.ansible_posix_$key" "$versions")
   ansible_core=$(yq -r ".ansible.$key" "$versions")
   ansible_runner_pin=$(yq -r '.ansible_runner' "$versions")
   ansible_lint_pin=$(yq -r ".ansible_lint.$key" "$versions")

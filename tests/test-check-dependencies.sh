@@ -23,11 +23,19 @@ fi
 EOF
 chmod +x "$tmp/bin/ansible-config"
 export PATH="$tmp/bin:$PATH"
+export IDARSI_ANSIBLE_ENVIRONMENT=ansible-current
 check_fails() {
   if VIRTUAL_ENV="$tmp/venv" ANSIBLE_COLLECTIONS_PATH="$1" "$repo_root/scripts/check-dependencies" >"$tmp/out" 2>&1; then
     printf 'Expected dependency check failure\n' >&2; exit 1
   fi
 }
+
+# Unknown virtualenv names must not silently select the current collection pin.
+if IDARSI_ANSIBLE_ENVIRONMENT= VIRTUAL_ENV="$tmp/custom-env" \
+  ANSIBLE_COLLECTIONS_PATH="$tmp/path-a" "$repo_root/scripts/check-dependencies" >"$tmp/out" 2>&1; then
+  printf 'Expected ambiguous active environment to fail\n' >&2; exit 1
+fi
+grep -q 'Cannot determine active Ansible environment' "$tmp/out"
 
 check_fails "$tmp/empty"
 grep -q 'version: missing' "$tmp/out"
@@ -136,7 +144,7 @@ if VIRTUAL_ENV= ANSIBLE_COLLECTIONS_PATH= "$tmp/repo/scripts/check-dependencies"
   printf 'Expected duplicate manifest to fail\n' >&2; exit 1
 fi
 grep -q 'exactly one declaration' "$tmp/out"
-sed -i '/  ansible_posix:/a\  ansible_posix: "2.2.2"' "$tmp/repo/versions.yml"
+sed -i '/  ansible_posix_current:/a\  ansible_posix_current: "2.2.2"' "$tmp/repo/versions.yml"
 cp "$repo_root/environments/ansible-current/requirements.yml" "$tmp/repo/environments/ansible-current/requirements.yml"
 if VIRTUAL_ENV= ANSIBLE_COLLECTIONS_PATH= "$tmp/repo/scripts/check-dependencies" >"$tmp/out" 2>&1; then
   printf 'Expected duplicate version pin to fail\n' >&2; exit 1
