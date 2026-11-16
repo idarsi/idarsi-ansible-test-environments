@@ -39,9 +39,13 @@ fi
 uri=${KVM_LIBVIRT_URI:-qemu:///system}
 umask 077
 work=$(mktemp -d "${TMPDIR:-/tmp}/idarsi-nested-kvm.XXXXXXXX")
+credentials="$work/credentials"
+mkdir -m 700 "$credentials"
+chmod 711 "$work"
 hash=$(printf '%s' "$work" | sha256sum | cut -c1-8)
 outer="nested-kvm-${hash}"
-export MOLECULE_EPHEMERAL_DIRECTORY="$work/molecule"
+outer_disk="$work/${outer}.qcow2"
+export MOLECULE_EPHEMERAL_DIRECTORY="$credentials/molecule"
 mkdir -m 700 "$MOLECULE_EPHEMERAL_DIRECTORY"
 cleanup() {
   local status=$?
@@ -58,18 +62,9 @@ cleanup() {
       cat "$log" >&2
     done
   fi
-  if [[ -n ${address:-} ]]; then
-    ssh -F /dev/null -i "$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      "molecule@$address" "for name in 'inner-$hash' 'image-$hash'; do sudo virsh destroy \"\$name\" >/dev/null 2>&1 || true; sudo virsh undefine \"\$name\" --remove-all-storage >/dev/null 2>&1 || true; done" >/dev/null 2>&1 || true
-  fi
-  # The inner VM and its disk exist only inside this uniquely owned outer VM.
-  # Destroying the outer VM on the host is the ultimate cleanup, even if SSH fails.
-  if ! MOLECULE_EPHEMERAL_DIRECTORY="$MOLECULE_EPHEMERAL_DIRECTORY" KVM_LIBVIRT_URI="$uri" \
-    "$repo_root/scripts/kvm-vm" destroy "$outer"; then
-    printf 'FAIL: could not destroy outer guest %s; cleanup may be incomplete.\n' "$outer" >&2
+  if ! "$repo_root/scripts/cleanup-nested-kvm" "$outer" "$uri" "$outer_disk" "$work"; then
     status=1
   fi
-  rm -rf -- "$work"
   exit "$status"
 }
 address=
@@ -95,6 +90,18 @@ export KVM_LIBVIRT_URI="$uri" KVM_CPU_HOST_PASSTHROUGH=true
 export KVM_VCPUS=${KVM_NESTED_OUTER_VCPUS:-4} KVM_MEMORY_MB=${KVM_NESTED_OUTER_MEMORY_MB:-8192}
 export KVM_INSTALL_TIMEOUT=${KVM_NESTED_INSTALL_TIMEOUT:-3600}
 export KVM_BASE_IMAGE_MODE=off
+export KVM_DISK_PATH="$outer_disk"
+# The system libvirt QEMU process must traverse the disk's parent directory.
+# chmod 0711 above grants directory traversal without exposing names; credentials
+# remain isolated in their 0700 subdirectory. Do not use sudo to impersonate QEMU
+# here: sudo policy may require a password even when the directory is traversable.
+# This metadata check is limited to the explicit work directory: it does not
+# prove access through every ancestor, account for ACLs, or guarantee libvirt's
+# configured QEMU identity. Libvirt remains authoritative when it opens the disk.
+if [[ $(stat -c '%a' "$work") != 711 ]]; then
+  printf 'FAIL: explicit disk parent %s is not mode 0711; refusing to create the outer VM.\n' "$work" >&2
+  exit 1
+fi
 result=$("$repo_root/scripts/kvm-vm" create "$outer" "$iso" "$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl")
 address=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["address"])' "$result")
 key="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"
@@ -158,6 +165,9 @@ for ((i=0; i<360; i++)); do
 done
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
+resource_output=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo env LC_ALL=C virsh dominfo '$inner'; printf '\\n--- DOMBLKINFO ---\\n'; sudo env LC_ALL=C virsh domblkinfo '$inner' vda")
+printf '%s\n' "$resource_output" | python3 "$repo_root/scripts/check-nested-kvm-resources.py" 2048 2 10
 hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'hostnamectl --static'")
 [[ $hostname == nested-role-integration.example.test ]] || {
@@ -189,12 +199,12 @@ else
   [[ $reboot_status == 255 ]] || { printf 'FAIL: reboot command failed with SSH status %s.\n' "$reboot_status" >&2; exit 1; }
 fi
 source_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "sudo virsh domiflist '$inner' | awk '\$3 == \"network\" {print tolower(\$5); exit}'")
+  "sudo env LC_ALL=C virsh domiflist '$inner'" | "$repo_root/scripts/virsh-network-mac")
 [[ $source_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]] || { printf 'FAIL: invalid source NIC MAC: %q\n' "$source_mac" >&2; exit 1; }
 lease_deadline=$((SECONDS + 180)); source_lease=
 while ((SECONDS < lease_deadline)); do
   source_lease=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-    "sudo virsh domifaddr '$inner' --source lease | awk -v mac='$source_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || source_lease=
+    "sudo env LC_ALL=C virsh domifaddr '$inner' --source lease | awk -v mac='$source_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || source_lease=
   validate_ipv4 "$source_lease" && break
   sleep 3
 done
@@ -212,17 +222,20 @@ fi
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh shutdown '$inner'"
 shutdown_deadline=$((SECONDS + 240))
 while ((SECONDS < shutdown_deadline)); do
-  state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" 2>/dev/null | tr -d '\r') || state=
+  state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo env LC_ALL=C virsh domstate '$inner'" 2>/dev/null | tr -d '\r') || state=
   [[ $state == 'shut off' ]] && break
   sleep 2
 done
 [[ $state == 'shut off' ]] || { printf 'FAIL: ISO source guest %s did not reach shut off state within 240 seconds (last state: %s).\n' "$inner" "${state:-unavailable}" >&2; exit 1; }
 image_vm="image-$hash"
-source_disk=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domblklist --details '$inner' | awk '\$2 == \"disk\" {print \$4; exit}'")
+source_disk=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo env LC_ALL=C virsh domblklist --details '$inner' | awk '\$2 == \"disk\" {print \$4; exit}'")
 [[ $source_disk == /* && $source_disk == *.qcow2 && $source_disk != *$'\n'* ]] || { printf 'FAIL: invalid discovered qcow2 source disk path: %q\n' "$source_disk" >&2; exit 1; }
 printf -v source_disk_q '%q' "$source_disk"
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "test -f $source_disk_q && sudo qemu-img check -f qcow2 $source_disk_q"
-python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/image-playbook.yml" "$image_vm" "$source_disk"
+image_tmp="/var/lib/libvirt/images/$image_vm.qcow2.tmp"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "printf 'incomplete image fixture\\n' | sudo tee '$image_tmp' >/dev/null"
+python3 "$repo_root/scripts/render-nested-kvm-playbook" "$work/image-playbook.yml" "$image_vm" "$source_disk" --state vm_present
 scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$work/image-playbook.yml" "molecule@$address:$playbook_dir/image-playbook.yml"
 for run in 1 2; do
   ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
@@ -230,13 +243,15 @@ for run in 1 2; do
     2>&1 | tee "$work/image-ansible-run-$run.log"
   if ((run == 2)); then "$repo_root/scripts/check-nested-kvm-idempotence" "$work/image-ansible-run-$run.log"; fi
 done
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "test ! -e '$image_tmp'"
 clone_deadline=$((SECONDS + 180)); clone_state=unavailable; clone_lease=
 while ((SECONDS < clone_deadline)); do
-  clone_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$image_vm'" 2>/dev/null | tr -d '\r') || clone_state=unavailable
+  clone_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo env LC_ALL=C virsh domstate '$image_vm'" 2>/dev/null | tr -d '\r') || clone_state=unavailable
   if [[ $clone_state == running ]]; then
-    clone_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domiflist '$image_vm' | awk '\$3 == \"network\" {print tolower(\$5); exit}'" 2>/dev/null) || clone_mac=
+    clone_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo env LC_ALL=C virsh domiflist '$image_vm'" 2>/dev/null | "$repo_root/scripts/virsh-network-mac") || clone_mac=
     if [[ $clone_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]]; then
-      clone_lease=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domifaddr '$image_vm' --source lease | awk -v mac='$clone_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || clone_lease=
+      clone_lease=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo env LC_ALL=C virsh domifaddr '$image_vm' --source lease | awk -v mac='$clone_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || clone_lease=
       if validate_ipv4 "$clone_lease" && wait_guest_ssh "$clone_lease" "$((SECONDS + 15))"; then break; fi
     fi
   fi
@@ -246,10 +261,99 @@ if ((SECONDS >= clone_deadline)); then
   printf 'FAIL: clone %s did not become running with a valid DHCP lease and reachable Rocky SSH before timeout (state=%s, MAC=%s, lease=%s).\n' "$image_vm" "$clone_state" "${clone_mac:-unavailable}" "${clone_lease:-unavailable}" >&2
   exit 1
 fi
+resource_output=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo env LC_ALL=C virsh dominfo '$image_vm'; printf '\\n--- DOMBLKINFO ---\\n'; sudo env LC_ALL=C virsh domblkinfo '$image_vm' vda")
+printf '%s\n' "$resource_output" | python3 "$repo_root/scripts/check-nested-kvm-resources.py" 1024 1 10
 clone_hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$clone_lease 'hostnamectl --static'")
 [[ $clone_hostname == nested-role-integration.example.test ]] || { printf 'FAIL: image clone static hostname is %q, expected nested-role-integration.example.test.\n' "$clone_hostname" >&2; exit 1; }
 clone_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$clone_lease 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
 [[ $clone_ipv4 == "$clone_lease" ]] || { printf 'FAIL: clone IPv4 %s does not match its libvirt lease %s.\n' "$clone_ipv4" "$clone_lease" >&2; exit 1; }
-source_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$inner'" | tr -d '\r')
+source_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo env LC_ALL=C virsh domstate '$inner'" | tr -d '\r')
 [[ $source_state == 'shut off' ]] || { printf 'FAIL: ISO source guest %s is not shut off after image clone provisioning (state: %s).\n' "$inner" "$source_state" >&2; exit 1; }
+
+# Exercise both removal scopes while all artifacts and package checks remain in
+# the disposable outer guest. The ISO disk is deliberately retained by default.
+run_role_state() {
+  local name=$1 state=$2 purge=$3 check_mode=${4:-}
+  local rendered="$work/$name-$state.yml"
+  python3 "$repo_root/scripts/render-nested-kvm-playbook" "$rendered" "$name" --state "$state" --purge-data-on-remove "$purge"
+  scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$rendered" "molecule@$address:$playbook_dir/$name-$state.yml"
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "sudo env ANSIBLE_COLLECTIONS_PATH=/opt/idarsi-nested-kvm/collections ansible-playbook $check_mode '$playbook_dir/$name-$state.yml'" \
+    2>&1 | tee "$work/$name-$state.log"
+}
+# Blueprint-only validation is supported in check mode. Every mutation state is
+# rejected by the role's preflight guard before host inspection or changes.
+run_role_state "$image_vm" validate false --check
+for mutating_state in install vm_present vm_absent absent; do
+  if run_role_state "$image_vm" "$mutating_state" false --check; then
+    printf 'FAIL: state %s unexpectedly succeeded in check mode.\n' "$mutating_state" >&2
+    exit 1
+  fi
+  grep -Fq 'mutations are not supported in check mode' "$work/$image_vm-$mutating_state.log"
+done
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$inner' >/dev/null && sudo virsh dominfo '$image_vm' >/dev/null && rpm -q qemu-kvm libvirt virt-install qemu-img lorax >/dev/null"
+iso_disk=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo env LC_ALL=C virsh domblklist --details '$inner' | awk '\$2 == \"disk\" {print \$4; exit}'")
+run_role_state "$inner" vm_absent false
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "! sudo virsh dominfo '$inner' >/dev/null 2>&1 && test -f '$iso_disk'"
+run_role_state "$inner" vm_absent false  # rerun must be a no-op
+"$repo_root/scripts/check-nested-kvm-idempotence" "$work/$inner-vm_absent.log"
+image_artifacts=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo python3 -c 'import json,pathlib; p=pathlib.Path(\"/var/lib/libvirt/images/$image_vm.ansible-iac-role-kvm-owned\"); data=json.loads(p.read_text()); print(\"\\n\".join(data[\"artifacts\"]))'")
+[[ -n $image_artifacts ]] || { printf 'FAIL: image ownership manifest contains no artifacts.\n' >&2; exit 1; }
+while IFS= read -r artifact; do
+  case $artifact in
+    "$image_vm.qcow2"|"$image_vm.qcow2.tmp"|"$image_vm-install.iso"|"$image_vm-install.iso.inputs"|"$image_vm-install.ks") ;;
+    *) printf 'FAIL: unexpected image artifact in ownership manifest: %q\n' "$artifact" >&2; exit 1 ;;
+  esac
+done <<<"$image_artifacts"
+run_role_state "$image_vm" vm_absent true
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "! sudo virsh dominfo '$image_vm' >/dev/null 2>&1 && ! test -e '/var/lib/libvirt/images/$image_vm.ansible-iac-role-kvm-owned' && ! test -e '/var/lib/libvirt/images/$image_vm.qcow2'"
+while IFS= read -r artifact; do
+  ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+    "! test -e '/var/lib/libvirt/images/$artifact'" || { printf 'FAIL: manifest-listed image artifact remains after purge: %s\n' "$artifact" >&2; exit 1; }
+done <<<"$image_artifacts"
+
+# Define an explicitly unmanaged, powered-off fixture with the same blueprint
+# name. The role must preserve it and must refuse package removal while any
+# domain remains. The harness removes only this exact fixture after proving both.
+sentinel="sentinel-$hash"
+sentinel_xml="$work/unmanaged-sentinel.xml"
+cat >"$sentinel_xml" <<EOF
+<domain type='qemu'>
+  <name>$sentinel</name>
+  <title>ansible-iac-role-kvm-owned</title>
+  <memory unit='MiB'>256</memory>
+  <vcpu>1</vcpu>
+  <os><type arch='x86_64'>hvm</type></os>
+  <devices><emulator>/usr/libexec/qemu-kvm</emulator></devices>
+</domain>
+EOF
+scp -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$sentinel_xml" "molecule@$address:/tmp/$inner-sentinel.xml"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh define '/tmp/$inner-sentinel.xml' && rm -f '/tmp/$inner-sentinel.xml' && test ! -e '/var/lib/libvirt/images/$sentinel.ansible-iac-role-kvm-owned'"
+sentinel_uuid=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domuuid '$sentinel'")
+if run_role_state "$sentinel" vm_absent false; then
+  printf 'FAIL: vm_absent unexpectedly accepted title-spoofed unmanaged sentinel %s.\n' "$sentinel" >&2
+  exit 1
+fi
+grep -Fq 'role ownership manifest is missing or unsafe' "$work/$sentinel-vm_absent.log"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "test \"\$(sudo virsh domuuid '$sentinel')\" = '$sentinel_uuid' && sudo virsh dumpxml '$sentinel' | grep -Fq '<title>ansible-iac-role-kvm-owned</title>' && test ! -e '/var/lib/libvirt/images/$sentinel.ansible-iac-role-kvm-owned'"
+if run_role_state "$sentinel" absent false; then
+  printf 'FAIL: state absent unexpectedly accepted a remaining domain.\n' >&2
+  exit 1
+fi
+grep -Fq 'Libvirt domains remain' "$work/$sentinel-absent.log"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$sentinel' >/dev/null && rpm -q qemu-kvm libvirt virt-install qemu-img lorax >/dev/null"
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh destroy '$sentinel' >/dev/null 2>&1 || true; sudo virsh undefine '$sentinel'"
+run_role_state "$inner" absent false
+ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "for package in qemu-kvm libvirt virt-install qemu-img lorax; do ! rpm -q \"\$package\" >/dev/null 2>&1 || exit 1; done"
+run_role_state "$inner" absent false
+"$repo_root/scripts/check-nested-kvm-idempotence" "$work/$inner-absent.log"
 printf 'PASS: role %s provisioned ISO guest %s and image clone %s; both booted Rocky Linux.\n' "$role_path" "$inner" "$image_vm"

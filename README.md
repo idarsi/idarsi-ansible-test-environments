@@ -1,5 +1,11 @@
 # Idarsi Ansible Test Environments
 
+Experimental concurrent-run isolation is available through
+[`scripts/test-run`](docs/isolated-test-runs.md). It uses per-run networks,
+subnets and identity-checked cleanup. It is opt-in; legacy commands are
+unchanged. See the documented initial scope and pending runtime acceptance
+before migrating scenarios.
+
 This repository prepares a Rocky Linux 10 or Fedora 43/44 host for running Molecule tests in
 Idarsi Ansible role repositories. Molecule scenarios stay in each role and
 choose one of two target backends:
@@ -83,6 +89,14 @@ Role repositories must define their Molecule scenarios to use the desired
 backend. See [role integration](docs/role-integration.md), the
 [Podman guidance](docs/podman-molecule.md), and the
 [KVM + Kickstart guide](docs/kvm-molecule.md).
+
+The KVM role's `kvm-lifecycle` scenario invokes this repository's
+`scripts/test-nested-kvm` harness. It exercises ISO and preconfigured-image
+blueprints and verifies requested memory, vCPUs, and disk capacity from
+libvirt: 2048 MB/2 vCPUs/10 GB for ISO and 1024 MB/1 vCPU/10 GB for the
+preconfigured image clone. This is manual, expensive nested integration coverage (one Rocky 10
+host/guest combination), not PR CI or a platform matrix; see
+[TESTING.md](TESTING.md) for the exact role command and limitations.
 
 This repository also has standalone smoke scenarios: run
 `molecule test -s podman-smoke` for Podman, or

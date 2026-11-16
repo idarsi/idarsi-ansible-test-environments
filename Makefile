@@ -29,6 +29,7 @@ setup-venv:
 
 check-scripts:
 	scripts/test-scripts
+	tests/test-nested-kvm-renderer.sh
 
 check-dependencies:
 	scripts/check-dependencies

@@ -1,0 +1,95 @@
+---
+- name: Validate image selection inputs
+  ansible.builtin.assert:
+    that:
+      - platform.image_path is not defined or platform.image_path is string
+      - platform.image_cache is not defined or platform.image_cache is mapping
+      - not ((platform.image_path is defined or platform.image_cache is defined) and (platform.install_source | default('') | string | length > 0))
+    fail_msg: "Platform {{ platform.name }} requires a string image_path, a mapping image_cache, and no nonempty install_source for image imports."
+
+- name: Select image input mode
+  ansible.builtin.set_fact:
+    kvm_use_cache: "{{ platform.image_path | default('') | length == 0 and platform.image_cache is defined }}"
+    kvm_resolved_platform: "{{ platform }}"
+
+- name: Require an image or cache when image_path is empty
+  ansible.builtin.assert:
+    that:
+      - platform.image_path is not defined or platform.image_path | length > 0 or kvm_use_cache
+    fail_msg: "Platform {{ platform.name }} has an empty image_path; provide image_cache metadata or a readable explicit image_path."
+
+- name: Resolve existing cached image without building or repairing it
+  when: kvm_use_cache
+  block:
+    - name: Validate cache identity
+      ansible.builtin.assert:
+        that:
+          - platform.image_cache.os_key is defined
+          - platform.image_cache.os_key is string
+          - platform.image_cache.os_key is match('^[A-Za-z0-9_-]+$')
+          - platform.image_cache.kickstart is defined
+          - platform.image_cache.kickstart is string
+          - platform.image_cache.kickstart | length > 0
+          - platform.image_cache.ssh_user is defined
+          - platform.image_cache.ssh_user is string
+          - platform.image_cache.ssh_user is match('^[a-z_][a-z0-9_-]*[$]?$')
+          - platform.image_cache.disk_size_gb is defined
+          - platform.image_cache.disk_size_gb | string is match('^[0-9]+$')
+          - platform.image_cache.disk_size_gb | int >= 10
+        fail_msg: "Platform {{ platform.name }} image_cache requires os_key, kickstart, ssh_user, and disk_size_gb (at least 10)."
+
+    - name: Find compatible readable cached image
+      ansible.builtin.command:
+        argv:
+          - "{{ test_environment }}/scripts/kvm-base-image"
+          - "find"
+          - "{{ platform.image_cache.os_key }}"
+          - "{{ platform.image_cache.kickstart if platform.image_cache.kickstart.startswith('/') else molecule_scenario_directory ~ '/' ~ platform.image_cache.kickstart }}"
+          - "{{ platform.image_cache.ssh_user }}"
+          - "{{ platform.image_cache.disk_size_gb | string }}"
+      register: kvm_cached_image
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Require a matching existing cached image
+      ansible.builtin.assert:
+        that:
+          - kvm_cached_image.rc == 0
+          - kvm_cached_image.stdout_lines | length == 1
+          - kvm_cached_image.stdout | length > 0
+        fail_msg: "Platform {{ platform.name }}: no readable compatible cached image or cache lookup input is missing. Prepare the cache separately or provide image_path. No image was built or repaired. {{ kvm_cached_image.stderr | default('') }}"
+
+    - name: Set effective image and its existing guest account
+      ansible.builtin.set_fact:
+        kvm_resolved_platform: "{{ platform | combine({'image_path': kvm_cached_image.stdout, 'ssh_user': platform.image_cache.ssh_user}) }}"
+
+- name: Validate selected image before provisioning any guests
+  when: kvm_resolved_platform.image_path is defined
+  block:
+    - name: Inspect selected image
+      ansible.builtin.stat:
+        path: "{{ kvm_resolved_platform.image_path }}"
+        get_checksum: false
+        get_mime: false
+        follow: true
+      register: kvm_selected_image
+
+    - name: Require a readable regular image file
+      ansible.builtin.assert:
+        that:
+          - kvm_selected_image.stat.isreg | default(false)
+          - kvm_selected_image.stat.readable | default(false)
+          - kvm_selected_image.stat.size | default(0) > 0
+        fail_msg: "Platform {{ platform.name }}: selected image_path is not a readable nonempty regular file. Explicit paths never fall back to image_cache."
+
+- name: Require inputs for image import or ISO installation
+  # ISO-only records keep their existing source inference in kvm-vm.
+  ansible.builtin.assert:
+    that:
+      - kvm_resolved_platform.image_path is defined or (platform.kickstart is defined and platform.kickstart is string and platform.kickstart | length > 0)
+    fail_msg: "Platform {{ platform.name }} requires image_path, image_cache, or an ISO-mode kickstart template."
+
+- name: Append validated platform record
+  ansible.builtin.set_fact:
+    molecule_kvm_platforms: "{{ molecule_kvm_platforms + [kvm_resolved_platform] }}"

@@ -31,6 +31,7 @@ env -u IDARSI_TEST_KVM_INSTALL_DIR \
   -u IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10 \
   -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 \
   -u IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 \
+  -u IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44 \
   -u IDARSI_TEST_KVM_BASE_DIR \
   PATH="$tmp/bin:$PATH" \
   IDARSI_TEST_KVM_INSTALL_DIR="$tmp/media" \
@@ -152,10 +153,17 @@ env -u IDARSI_TEST_KVM_INSTALL_DIR \
 env -i PATH="$PATH" \
   IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9="$tmp/rhel-9.9-x86_64-dvd.iso" \
   IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10="$tmp/rhel-10.3-x86_64-dvd.iso" \
+  IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44="$tmp/fedora-44.iso" \
   bash -c '
   source "$1/.venv/ansible-current/bin/activate"
   [[ $IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL9 == "$2" ]]
   [[ $IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10 == "$3" ]]
-' _ "$fixture" "$tmp/rhel-9.9-x86_64-dvd.iso" "$tmp/rhel-10.3-x86_64-dvd.iso"
+  [[ $IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44 == "$4" ]]
+' _ "$fixture" "$tmp/rhel-9.9-x86_64-dvd.iso" "$tmp/rhel-10.3-x86_64-dvd.iso" "$tmp/fedora-44.iso"
+printf '%s\n' "$tmp/fedora-file.iso" >"$fixture/.kvm-install-source-fedora44"
+env -i PATH="$PATH" bash -c '
+  source "$1/.venv/ansible-current/bin/activate"
+  [[ $IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44 == "$2" ]]
+' _ "$fixture" "$tmp/fedora-file.iso"
 
 printf 'RHEL install-source functional checks passed.\n'

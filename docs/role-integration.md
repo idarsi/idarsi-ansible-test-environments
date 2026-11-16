@@ -47,4 +47,20 @@ collections:
     version: 3.0.0
 ```
 
+Activation exports `IDARSI_MOLECULE_COLLECTIONS_FILE`, defaulting to
+`collections-ansible-min.yml` for `ansible-min` and `collections.yml` for
+`ansible-current`/`ansible-next`. An explicitly set value is preserved. Molecule
+consumes this variable when selecting the role's collection requirements file
+(for example in `molecule.yml`):
+
+```yaml
+dependency:
+  name: galaxy
+  options:
+    requirements-file: "${IDARSI_MOLECULE_COLLECTIONS_FILE}"
+```
+
+The selected file is role-specific and its collections are installed by
+Molecule, not in the shared venv.
+
 The example is role-specific and is not installed in the shared venv.

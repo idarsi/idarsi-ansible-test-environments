@@ -3,10 +3,76 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 usage() {
-  printf 'Usage: %s <ansible-min|ansible-current|ansible-next>\n' "$0" >&2
+  printf 'Usage: %s [--refresh-activation] <ansible-min|ansible-current|ansible-next>\n' "$0" >&2
 }
+refresh_activation=false
+if [[ ${1:-} == --refresh-activation ]]; then
+  refresh_activation=true
+  shift
+fi
 environment=${1:-}
+[[ $# == 1 && $environment =~ ^ansible-(min|current|next)$ ]] || { usage; exit 2; }
 [[ -d "$repo_root/environments/$environment" ]] || { usage; exit 2; }
+venv="$repo_root/.venv/$environment"
+
+write_fedora_activation() {
+  local activate="$venv/bin/activate" content line block prefix suffix temporary
+  local begin='# BEGIN IDARSI FEDORA44 INSTALL SOURCE'
+  local end='# END IDARSI FEDORA44 INSTALL SOURCE'
+  local state=0
+  [[ -f "$activate" && ! -L "$activate" ]] || {
+    printf 'Activation file must be an existing regular, non-symlink file: %s\n' "$activate" >&2
+    return 1
+  }
+  # read -d '' retains trailing newlines; activation scripts must not contain NULs.
+  if IFS= read -r -d '' content <"$activate"; then
+    printf 'Invalid NUL in activation file: %s\n' "$activate" >&2
+    return 1
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ $line == *"$begin"* ]]; then
+      [[ $line == "$begin" && $state == 0 ]] || break
+      state=1
+    elif [[ $line == *"$end"* ]]; then
+      [[ $line == "$end" && $state == 1 ]] || break
+      state=2
+    fi
+    line=''
+  done <<<"$content"
+  if [[ -n "$line" || $state == 1 ]]; then
+    printf 'Malformed or duplicate Fedora activation markers: %s\n' "$activate" >&2
+    return 1
+  fi
+  block=$(cat <<ACTIVATE_FEDORA
+$begin
+if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44:-} && -r $(printf '%q' "$repo_root/.kvm-install-source-fedora44") ]]; then
+  IFS= read -r IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44 <$(printf '%q' "$repo_root/.kvm-install-source-fedora44") || :
+  export IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44
+fi
+$end
+ACTIVATE_FEDORA
+)
+  temporary=$(mktemp "$venv/bin/.activate.XXXXXXXX") || return 1
+  if ! {
+    if [[ $state == 2 ]]; then
+      prefix=${content%%"$begin"*}
+      suffix=${content#*"$end"}
+      printf '%s%s%s' "$prefix" "$block" "$suffix"
+    else
+      printf '%s\n%s\n' "$content" "$block"
+    fi
+  } >"$temporary" || ! chmod --reference="$activate" "$temporary" || ! mv -f -- "$temporary" "$activate"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+}
+
+# This repair path must not discover Python, rebuild a venv, or install anything.
+if $refresh_activation; then
+  write_fedora_activation
+  printf 'Refreshed %s/bin/activate\n' "$venv"
+  exit 0
+fi
 
 python_version=$(awk -v key="${environment#ansible-}:" '
   /^python:/ { in_python = 1; next }
@@ -32,7 +98,10 @@ command -v "$python_bin" >/dev/null || {
   exit 1
 }
 
-venv="$repo_root/.venv/$environment"
+case "$environment" in
+  ansible-min) molecule_collections_file=collections-ansible-min.yml ;;
+  ansible-current|ansible-next) molecule_collections_file=collections.yml ;;
+esac
 "$python_bin" -m venv --clear "$venv"
 "$venv/bin/python" -m pip install --disable-pip-version-check -r "$repo_root/environments/$environment/requirements.txt"
 "$venv/bin/ansible-galaxy" collection install \
@@ -44,6 +113,12 @@ cat >>"$venv/bin/activate" <<ACTIVATE_HOOK
 
 # Idarsi Ansible test environment integration.
 export IDARSI_TEST_ENVIRONMENT=$(printf '%q' "$repo_root")
+export IDARSI_ANSIBLE_ENVIRONMENT=$(printf '%q' "$environment")
+if [[ -z \${IDARSI_MOLECULE_COLLECTIONS_FILE:-} ]]; then
+  export IDARSI_MOLECULE_COLLECTIONS_FILE=$(printf '%q' "$molecule_collections_file")
+else
+  export IDARSI_MOLECULE_COLLECTIONS_FILE
+fi
 _idarsi_collections_path=$(printf '%q' "$venv/collections")
 case ":\${ANSIBLE_COLLECTIONS_PATH:-}:" in
   *":\$_idarsi_collections_path:"*) ;;
@@ -67,4 +142,5 @@ if [[ -z \${IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10:-} && -r $(printf '%q' "$repo_
   export IDARSI_TEST_KVM_INSTALL_SOURCE_RHEL10
 fi
 ACTIVATE_HOOK
+write_fedora_activation
 printf 'Created %s\nActivate with: source %s/bin/activate\n' "$venv" "$venv"

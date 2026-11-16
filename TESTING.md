@@ -1,15 +1,86 @@
 # Testing
 
+`test_isolated_private.py` checks private non-export publication states, actual
+object recovery reconciliation, strict legacy fallback, Netbox-shaped omitted
+metadata without foreign header reads, explicit references and query failures,
+provenance mismatches, hardlinks, inode substitution and pending dependencies.
+Backend queries are mocked; these checks do not replace runtime acceptance.
+
+## Isolated-run launcher
+
+The experimental `scripts/test-run` contract and runtime acceptance matrix are
+documented in [isolated test runs](docs/isolated-test-runs.md). Its cheap tests
+use temporary state and mocked backend commands:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_isolated*.py' -v
+```
+
+They cover concurrent allocator processes, discovery failures, inactive-network
+and route conflicts, resource replacement, retained leases after cleanup
+failure, worker start journaling/session recovery, and managed/legacy guards.
+They do not demonstrate real Podman/KVM or all pinned Molecule compatibility.
+The repository-checks workflow runs these unit tests on pull requests and its
+weekly schedule, using Python 3.12 and no backend services.
+Actual effective-config smoke tests run when an existing Molecule installation
+is active (otherwise explicitly skipped). Local minimum/current checks cover
+inherited parallel and shared-state configuration. Filesystem fault-boundary
+tests use only private temporary directories, never the real KVM storage
+directory. They cover unnamed-inode publication, EEXIST, replacement refusal,
+directory-fsync ordering, independent data disks and journal-write interleaving.
+`StorageTraversalTests` additionally exercises search-only ancestors as an
+unprivileged user, target-directory read/fsync requirements, symlink refusal
+and unchanged trust checks. Its permission-denial cases explicitly skip under
+root; all permission changes are confined to temporary test fixtures.
+Focused `test_isolated_lifecycle.py` regressions launch only tiny local Python
+processes in journalled test sessions: a writer survives its parent's timeout
+or nonzero exit, in-session destroy defers removal, and supervisor cleanup stops
+the writer before simulated deletion. Foreign-storage tests mock all backend
+queries and cover nested backing stores, image chains missing from inactive
+XML, pool/volume paths, inode aliases, query failures and partial disk-cleanup
+retry. No real libvirt, Podman, guestfs or QEMU processes are used by these tests.
+`test_isolated_graph.py` adds metadata-only concurrent cleanup evidence:
+complete live XML without image opens, matching private managed captures for
+inaccessible active disks, raw omission versus explicit qcow2 termination,
+independent persistent references, rejected forged/stale/incomplete records,
+pending dependency claims, and shared-lock/capture-before-start ordering.
+Its backend queries are mocked; this is not concurrent VM runtime evidence.
+`test_isolated_network.py` covers network teardown against direct bridges,
+network names/UUIDs, network/kernel aliases, resolved actual interfaces and
+divergent live/persistent definitions. It asserts no `net-destroy` on a
+dependency, configuration mismatch or uncertain query, and retains successful
+cleanup for proven-unrelated interfaces. Every backend and kernel-network query
+in these tests is mocked.
+The tester owns concurrent same-scenario, interrupt and crash-recovery runtime
+acceptance. No roles have been migrated automatically.
+
+## Existing environment checks
+
 This repository prepares a reusable Rocky Linux 10 or Fedora 43/44 host for Molecule tests in
 Idarsi Ansible role repositories. The shared controller venv supports two
 target backends: Podman for fast tests and KVM + Kickstart for full virtual
 machines. Role-specific scenarios and tests remain in each role repository.
+
+Run `bash tests/test-kvm-image-cache.sh` from an activated shared environment
+for VM-free image-cache selection tests. It invokes the real create playbook
+with isolated launcher mocks and checks empty-path fallback, explicit-path
+precedence, effective guest account and instance configuration, missing cache
+and invalid metadata rejection before any VM actions, and ISO compatibility.
+It also checks deterministic real cache lookup using temporary file fixtures
+and is included in `make check-scripts`.
+`bash tests/test-kvm-ssh-user-forwarding.sh` covers explicit-image account
+forwarding. These focused checks do not replace runtime KVM/SELinux verification.
 
 | Ansible environment | ansible-core | ansible-lint | Python | Typical use |
 | --- | --- | --- | --- | --- |
 | `ansible-min` | 2.15.13 | 6.22.2 | 3.9 | Minimum supported line |
 | `ansible-current` | 2.20.8 | 26.8.0 | 3.12 | Default development baseline |
 | `ansible-next` | 2.21.3 | 26.8.0 | 3.14 | Forward compatibility |
+
+Host support does not imply every controller line supports every guest Python.
+In particular, `ansible-min` (Core 2.15) cannot target Fedora 44's default
+Python 3.14; use a compatible controller line for that guest. Pins remain
+environment-specific.
 
 Run `./install.sh [podman|kvm|all] [ansible-min|ansible-current|ansible-next]`
 to prepare the host and selected venv. Activate the venv before running the
@@ -25,8 +96,51 @@ Before submitting repository changes, run `make validate` and `yamllint .`.
 The setup-script checks include an isolated RHEL install-source functional test
 for versioned ISO discovery, explicit overrides, and `setup-venv` activation;
 it uses temporary files and mocked environment-creation commands, without
-network access or libvirt. Role behavior is verified by each role's own
-Molecule scenarios.
+network access or libvirt. KVM base-image sealing ownership and permission
+checks are also VM-free and use mocked commands. Role behavior is verified by
+each role's own Molecule scenarios.
+
+The KVM diagnostic smoke tests include Rocky 10 and Fedora 44. A focused
+launcher mapping test mocks tmux and host checks; it verifies Rocky's default
+mapping and the explicit Fedora 44 mapping without starting KVM. The Fedora 44
+wrapper requires an official Fedora Server DVD ISO filename and disables base
+image reuse to ensure the supplied ISO is actually tested. It permits a
+7200-second installation and remains a manual KVM check, not part of
+`make validate`.
+The VM-free `bash tests/test-prepare-kvm-base-images.sh` fixture verifies all
+five OS source/template mappings with mocked base-image and host-permission
+commands; it does not prepare images or alter host directories.
+To repair an existing environment's Fedora 44 activation hook without rebuilding
+it or installing dependencies, run:
+
+```bash
+scripts/setup-venv --refresh-activation ansible-current
+source .venv/ansible-current/bin/activate
+```
+
+The same command accepts `ansible-min` and `ansible-next`. It requires an
+existing regular, non-symlink `bin/activate` and updates only its delimited
+Fedora block, preserving everything outside it (including local integration
+exports). Missing activation files and malformed or duplicate markers fail
+without modification. Repeated refreshes are byte-for-byte idempotent.
+Updates use an atomic rename and preserve activation-file permissions.
+Activation reads `.kvm-install-source-fedora44` as literal single-line data
+(including spaces and a missing final newline), only when
+`IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44` is unset or empty; explicit nonempty
+overrides win. Normal environment creation installs the same hook.
+
+The VM-free `bash tests/test-setup-venv-refresh.sh` fixture check covers all
+three profiles, preservation, idempotence, replacement, literal data and
+overrides, and invalid-file/marker rejection without touching real `.venv`
+directories. It is also included in `make check-scripts`. Real activation and
+TUI-equivalent KVM verification remain separate runtime checks.
+
+VM-free cleanup fixtures (`test-kvm-destroy-overlay.sh`,
+`test-kvm-explicit-disk.sh`, `test-kvm-overlay-cleanup.sh`, and
+`test-kvm-base-image-ownership.sh` under `tests/`) cover paused guests and
+preservation of storage on libvirt query, stop, or undefine failures. Cleanup
+requires matching UUID ownership and verified removal before deleting storage;
+uncertain failures retain storage and recovery files for manual inspection.
 
 An explicit manual nested-KVM integration test is available on a capable KVM
 host (not part of regular tests). After `./install.sh kvm` and configuring the
@@ -49,21 +163,37 @@ and requires a DHCP lease matching the source NIC MAC plus SSH before gracefully
 shutting down and preserving that qcow2 disk.
 It then provisions a uniquely named clone using `source.type: image` and that
 preconfigured disk, checks importing/booting the image and second-run
-idempotence, and verifies the clone has a lease matching its libvirt NIC MAC,
-accepts SSH, boots Rocky, retains the inherited hostname, and has the leased
-IPv4 address. On failure, the harness prints libvirt domain, interface, and
+idempotence (`changed=0`), and verifies the clone has a lease matching its
+libvirt NIC MAC, accepts SSH, boots Rocky, retains the inherited hostname, and
+has the leased IPv4 address. This nested image-source integration test passed:
+the ISO guest was converted from static networking to DHCP and rebooted
+successfully, then its qcow2 disk was imported and booted as a clone with the
+checks above. On failure, the harness prints libvirt domain, interface, and
 lease diagnostics before cleanup. The image
-path tests importing and booting a preconfigured ISO-installed image, not image
-customization; its blueprint omits network configuration because the image
-already carries its hostname and a DHCP profile. The source guest stays shut
-off while the clone obtains its own lease on `idarsi-test`. This image-source extension is
-designed coverage and is pending runtime verification; it does not yet add
-verified test evidence. The outer test VM is
+path tests importing and booting a preconfigured ISO-installed Rocky image, not
+arbitrary external/cloud image customization; its blueprint omits network
+configuration because the image already carries its hostname and a DHCP
+profile. The source guest stays shut off while the clone obtains its own lease
+on `idarsi-test`. This manual run is runtime evidence for this nested host and
+Rocky image workflow, not a general claim that arbitrary qcow2 images can be
+customized. The outer test VM is
 created only by manual harness invocation; the role is not run on the physical
 host and cannot create a host-side role-managed VM. Role files are transferred
 as a filtered tar archive without `.git`, tests, secret/credential-named files,
 or local configuration. Ansible Core, Lorax, and the role's pinned collection
 requirements are installed/resolved on the disposable outer guest only.
+The VM-free `tests/test-nested-kvm-renderer.sh` checks exact rendered state and
+purge options. Run it with `make check-scripts`; lifecycle runtime checks remain
+manual and must operate only inside the disposable outer guest.
+The nested harness additionally validates `state: validate` in check mode and
+requires `install`, `vm_present`, `vm_absent`, and `absent` to fail closed in
+check mode. It checks ISO removal without purge (including a no-op repeat),
+image removal with manifest-scoped purge, refusal to remove a same-name
+unmanaged sentinel domain, and refusal of `state: absent` while any domain is
+defined. Only after those refusal checks does the harness undefine its exact
+sentinel fixture; it then verifies `state: absent` removes the role's explicit
+KVM package set and that a second run succeeds idempotently. Runtime evidence
+remains pending until run on a nested-KVM-capable host.
 Missing nested virtualization support is reported as `SKIP`; once opted in,
 missing prerequisites or test failures are `FAIL`.
 The prerequisite check requires readable CPU flags exposing `vmx` with an
@@ -78,6 +208,15 @@ cleanup over SSH is best effort; failure to destroy the outer VM is reported.
 Private temporary artifacts are removed on exit; no host-wide uninstall runs.
 Allow at least 8 GiB RAM and four CPUs for the outer guest, in addition to the
 inner guest resources.
+The ISO blueprint requests 2048 MB, 2 vCPUs, and a 10 GB disk; the image-clone
+blueprint requests 1024 MB, 1 vCPU, and a 10 GB disk. The harness verifies
+libvirt `dominfo` memory/CPU and `domblkinfo` capacity against these declared
+values for both guests. `tests/test_nested_kvm_resources.py` covers parser
+success, resource mismatch, and missing fields without requiring a VM. The
+role-owned `kvm-lifecycle` Molecule scenario invokes this harness and is a
+manual, expensive integration check, not PR CI. Its one Rocky 10 host/guest
+result and preconfigured ISO-derived image source are the limits of current
+integration evidence.
 The generated blueprint statically configures the inner guest at
 `192.168.250.210/24` on the repository-created `idarsi-test` network, with
 gateway and nameserver `192.168.250.1`. This address is outside the DHCP pool

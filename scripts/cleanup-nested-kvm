@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# != 4)); then
+  printf 'Usage: cleanup-nested-kvm DOMAIN LIBVIRT_URI DISK_PATH WORK_DIRECTORY\n' >&2
+  exit 2
+fi
+domain=$1 uri=$2 disk=$3 work=$4
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+# Validate the complete artifact relationship before invoking anything that can
+# destroy the VM or remove files. These paths are created by test-nested-kvm.
+tmp_root=${TMPDIR:-/tmp}
+if [[ ! -d $tmp_root || -L $tmp_root ]]; then
+  printf 'FAIL: invalid temporary-directory root: %s\n' "$tmp_root" >&2
+  exit 2
+fi
+tmp_root=$(realpath -e -- "$tmp_root") || exit 2
+if [[ ! -d $work || -L $work ]]; then
+  printf 'FAIL: invalid nested KVM work directory: %s\n' "$work" >&2
+  exit 2
+fi
+canonical_work=$(realpath -e -- "$work") || exit 2
+if [[ $canonical_work != "$work" || ${canonical_work%/*} != "${tmp_root%/}" || ! ${canonical_work##*/} =~ ^idarsi-nested-kvm\.[[:alnum:]]{8}$ ]]; then
+  printf 'FAIL: work directory is not an invocation-owned nested KVM temporary directory: %s\n' "$work" >&2
+  exit 2
+fi
+if [[ $(stat -c %u -- "$canonical_work") != "$EUID" ]]; then
+  printf 'FAIL: nested KVM work directory is not owned by the invoking user: %s\n' "$work" >&2
+  exit 2
+fi
+hash=$(printf '%s' "$canonical_work" | sha256sum | cut -c1-8)
+if [[ ! $domain =~ ^nested-kvm-[[:xdigit:]]{8}$ || $domain != "nested-kvm-$hash" ]]; then
+  printf 'FAIL: domain does not match nested KVM work directory: %s\n' "$domain" >&2
+  exit 2
+fi
+expected_disk="$canonical_work/$domain.qcow2"
+if [[ $disk != "$expected_disk" || -L $disk || ( -e $disk && ! -f $disk ) ]]; then
+  printf 'FAIL: disk path does not match nested KVM work directory: %s\n' "$disk" >&2
+  exit 2
+fi
+if [[ -e $disk && $(realpath -e -- "$disk") != "$expected_disk" ]]; then
+  printf 'FAIL: disk path is not canonical: %s\n' "$disk" >&2
+  exit 2
+fi
+molecule_dir="$work/credentials/molecule"
+hash=$(printf '%s' "$molecule_dir" | sha256sum | cut -c1-8)
+libvirt_domain="molecule-${domain}-${hash}"
+libvirt_domain=${libvirt_domain:0:63}
+
+if ! MOLECULE_EPHEMERAL_DIRECTORY="$molecule_dir" KVM_LIBVIRT_URI="$uri" \
+  "$repo_root/scripts/kvm-vm" destroy "$domain"; then
+  printf 'FAIL: could not destroy outer guest %s; preserving disk and work directory at %s\n' "$domain" "$work" >&2
+  exit 1
+fi
+if ! domain_names=$(LC_ALL=C virsh --connect "$uri" list --all --name); then
+  printf 'FAIL: could not list outer guests; preserving disk and work directory at %s\n' "$work" >&2
+  exit 1
+fi
+if grep -Fxq -- "$libvirt_domain" <<<"$domain_names"; then
+  printf 'FAIL: outer guest %s still exists; preserving disk and work directory at %s\n' "$libvirt_domain" "$work" >&2
+  exit 1
+fi
+
+# Only remove artifacts after destroy succeeded and libvirt confirms the domain
+# is absent. The explicit disk can otherwise still be attached to QEMU.
+if [[ -f $disk && ! -L $disk ]]; then
+  rm -f -- "$disk" || {
+    printf 'FAIL: could not remove detached outer disk %s; preserving work directory at %s\n' "$disk" "$work" >&2
+    exit 1
+  }
+fi
+rm -rf -- "$work" || {
+  printf 'FAIL: could not remove nested KVM work directory; recoverable artifacts remain at %s\n' "$work" >&2
+  exit 1
+}

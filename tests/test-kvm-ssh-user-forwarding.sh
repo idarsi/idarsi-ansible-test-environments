@@ -6,6 +6,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/environment/molecule/kvm" "$tmp/environment/scripts" "$tmp/ephemeral" "$tmp/scenario"
 cp "$root/molecule/kvm/create.yml" "$tmp/environment/molecule/kvm/create.yml"
+cp "$root/molecule/kvm/resolve-platform.yml" "$tmp/environment/molecule/kvm/resolve-platform.yml"
 cat >"$tmp/environment/scripts/kvm-vm" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -13,7 +14,7 @@ printf '%s\n' "${KVM_SSH_USER:-molecule}" >"$MOLECULE_SCENARIO_DIRECTORY/capture
 printf '%s\n' '{"instance":"image-user-test","address":"192.0.2.10","user":"rocky"}'
 SH
 chmod +x "$tmp/environment/scripts/kvm-vm"
-touch "$tmp/image.qcow2"
+printf 'fixture image\n' >"$tmp/image.qcow2"
 cat >"$tmp/scenario/molecule.yml" <<EOF
 driver: {name: default}
 platforms:

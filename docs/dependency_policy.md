@@ -3,9 +3,10 @@
 ## Shared environment
 
 The virtual environments pin ansible-core, Ansible Lint, Molecule, Ansible
-Runner, the Molecule Podman plugin, and the small set of collections needed by
-the shared test setup. `versions.yml` is the source of truth; generated
-requirements are checked by `scripts/check-dependencies`.
+Runner, the Molecule Podman plugin, setuptools (which supplies the legacy
+`distutils` compatibility shim on Python 3.12), and the small set of
+collections needed by the shared test setup. `versions.yml` is the source of
+truth; generated requirements are checked by `scripts/check-dependencies`.
 
 Dependabot intentionally does not update generated `requirements.txt` files.
 Update dependency versions in `versions.yml` using `scripts/update-dependencies`,
