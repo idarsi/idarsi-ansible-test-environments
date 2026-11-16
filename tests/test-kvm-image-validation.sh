@@ -36,7 +36,7 @@ EOF
     "$root/molecule/kvm/create.yml" >"$tmp/playbook.out" 2>&1; then
     echo "Expected conflicting image/ISO input rejection" >&2; exit 1
   fi
-  grep -q 'must use either image_path or install_source' "$tmp/playbook.out"
+  grep -q 'no nonempty install_source for image imports' "$tmp/playbook.out"
   [[ ! -e "$tmp/instance.json" && $(sha256sum "$source") == "$before" ]]
   echo "PASS: launcher and create playbook reject bad inputs before mutation; source unchanged"
 else

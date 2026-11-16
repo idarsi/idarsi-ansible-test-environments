@@ -53,13 +53,12 @@ if ! MOLECULE_EPHEMERAL_DIRECTORY="$molecule_dir" KVM_LIBVIRT_URI="$uri" \
   printf 'FAIL: could not destroy outer guest %s; preserving disk and work directory at %s\n' "$domain" "$work" >&2
   exit 1
 fi
-if dominfo_output=$(virsh --connect "$uri" dominfo "$libvirt_domain" 2>&1); then
-  printf 'FAIL: outer guest %s still exists; preserving disk and work directory at %s\n' "$libvirt_domain" "$work" >&2
+if ! domain_names=$(LC_ALL=C virsh --connect "$uri" list --all --name); then
+  printf 'FAIL: could not list outer guests; preserving disk and work directory at %s\n' "$work" >&2
   exit 1
 fi
-if [[ ! $dominfo_output =~ (^|[[:space:]])Domain[[:space:]]not[[:space:]]found([:[:space:]]|$) ]]; then
-  printf 'FAIL: could not establish whether outer guest %s exists; virsh query failed: %s; preserving disk and work directory at %s\n' \
-    "$libvirt_domain" "$dominfo_output" "$work" >&2
+if grep -Fxq -- "$libvirt_domain" <<<"$domain_names"; then
+  printf 'FAIL: outer guest %s still exists; preserving disk and work directory at %s\n' "$libvirt_domain" "$work" >&2
   exit 1
 fi
 

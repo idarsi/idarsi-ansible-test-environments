@@ -5,6 +5,16 @@ Idarsi Ansible role repositories. The shared controller venv supports two
 target backends: Podman for fast tests and KVM + Kickstart for full virtual
 machines. Role-specific scenarios and tests remain in each role repository.
 
+Run `bash tests/test-kvm-image-cache.sh` from an activated shared environment
+for VM-free image-cache selection tests. It invokes the real create playbook
+with isolated launcher mocks and checks empty-path fallback, explicit-path
+precedence, effective guest account and instance configuration, missing cache
+and invalid metadata rejection before any VM actions, and ISO compatibility.
+It also checks deterministic real cache lookup using temporary file fixtures
+and is included in `make check-scripts`.
+`bash tests/test-kvm-ssh-user-forwarding.sh` covers explicit-image account
+forwarding. These focused checks do not replace runtime KVM/SELinux verification.
+
 | Ansible environment | ansible-core | ansible-lint | Python | Typical use |
 | --- | --- | --- | --- | --- |
 | `ansible-min` | 2.15.13 | 6.22.2 | 3.9 | Minimum supported line |
@@ -36,6 +46,37 @@ wrapper requires an official Fedora Server DVD ISO filename and disables base
 image reuse to ensure the supplied ISO is actually tested. It permits a
 7200-second installation and remains a manual KVM check, not part of
 `make validate`.
+To repair an existing environment's Fedora 44 activation hook without rebuilding
+it or installing dependencies, run:
+
+```bash
+scripts/setup-venv --refresh-activation ansible-current
+source .venv/ansible-current/bin/activate
+```
+
+The same command accepts `ansible-min` and `ansible-next`. It requires an
+existing regular, non-symlink `bin/activate` and updates only its delimited
+Fedora block, preserving everything outside it (including local integration
+exports). Missing activation files and malformed or duplicate markers fail
+without modification. Repeated refreshes are byte-for-byte idempotent.
+Updates use an atomic rename and preserve activation-file permissions.
+Activation reads `.kvm-install-source-fedora44` as literal single-line data
+(including spaces and a missing final newline), only when
+`IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44` is unset or empty; explicit nonempty
+overrides win. Normal environment creation installs the same hook.
+
+The VM-free `bash tests/test-setup-venv-refresh.sh` fixture check covers all
+three profiles, preservation, idempotence, replacement, literal data and
+overrides, and invalid-file/marker rejection without touching real `.venv`
+directories. It is also included in `make check-scripts`. Real activation and
+TUI-equivalent KVM verification remain separate runtime checks.
+
+VM-free cleanup fixtures (`test-kvm-destroy-overlay.sh`,
+`test-kvm-explicit-disk.sh`, `test-kvm-overlay-cleanup.sh`, and
+`test-kvm-base-image-ownership.sh` under `tests/`) cover paused guests and
+preservation of storage on libvirt query, stop, or undefine failures. Cleanup
+requires matching UUID ownership and verified removal before deleting storage;
+uncertain failures retain storage and recovery files for manual inspection.
 
 An explicit manual nested-KVM integration test is available on a capable KVM
 host (not part of regular tests). After `./install.sh kvm` and configuring the

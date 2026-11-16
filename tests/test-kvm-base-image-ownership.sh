@@ -9,6 +9,7 @@ bin="$tmp/bin"
 base_dir="$tmp/bases"
 mkdir -p "$mock_repo/scripts" "$bin" "$base_dir"
 cp "$repo_root/scripts/kvm-base-image" "$mock_repo/scripts/"
+sed -i 's/deadline=$((SECONDS + 180))/deadline=$SECONDS/' "$mock_repo/scripts/kvm-base-image"
 cat >"$mock_repo/scripts/kvm-base-dir" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$TEST_BASE_DIR"
@@ -61,6 +62,8 @@ if grep -Eq '^virsh .* (destroy|undefine) ' "$CALL_LOG"; then
   exit 1
 fi
 grep -q '^virsh .* domuuid ' "$CALL_LOG"
+[[ -n $(find "$base_dir" -name '*.building.qcow2' -print -quit) ]]
+find "$base_dir" -name '*.building.qcow2' -delete
 
 # A sealing failure must clean the still-owned temporary disk. Destructive
 # libvirt operations use the UUID, not the reusable domain name.
@@ -81,8 +84,11 @@ printf 'virsh %s\n' "$*" >>"$CALL_LOG"
 case "$*" in
   *domblklist*) disk=$(find "$TEST_BASE_DIR" -name '*.building.qcow2' -print -quit); printf ' Type Device Target Source\n------------------------------------------------\n file disk vda %s\n' "$disk";;
   *domuuid*) printf '%s\n' "$DOMAIN_UUID";;
-  *domstate*) printf 'shut off\n';;
-  *undefine*) printf "Domain '%s' has been undefined\n" "${*: -1}";;
+  *domstate*)
+    [[ ${QUERY_FAIL:-0} == 0 ]] || exit 1
+    if [[ -e $CALL_LOG.absent ]]; then echo 'error: Domain not found' >&2; exit 1; fi
+    printf 'shut off\n';;
+  *undefine*) [[ ${UNDEFINE_FAIL:-0} == 0 ]] || exit 1; touch "$CALL_LOG.absent"; printf "Domain '%s' has been undefined\n" "${*: -1}";;
   *) exit 0;;
 esac
 SH
@@ -94,6 +100,15 @@ fi
 grep -q 'virsh --connect qemu:///system undefine 11111111-1111-4111-8111-111111111111' "$CALL_LOG"
 ! grep -Eq '^virsh .* (destroy|undefine) molecule-base-' "$CALL_LOG"
 [[ -z $(find "$base_dir" -name '*.building.qcow2' -print -quit) ]]
+rm -f "$CALL_LOG.absent"
+
+for failure in QUERY_FAIL UNDEFINE_FAIL; do
+  export "$failure=1"
+  if "$mock_repo/scripts/kvm-base-image" ensure "$tmp/source.iso" "$tmp/kickstart.ks" molecule 10 default qemu:///system >"$tmp/out" 2>&1; then exit 1; fi
+  [[ -n $(find "$base_dir" -name '*.building.qcow2' -print -quit) ]]
+  find "$base_dir" -name '*.building.qcow2' -delete
+  unset "$failure"
+done
 
 # Successful publication retains the cache; a second ensure reuses it.
 unset SYSPREP_FAIL
@@ -109,6 +124,7 @@ grep -q 'Created sealed OS base image' "$tmp/published.stderr"
 [[ $(tail -n 1 "$tmp/reused") == "$published_image" && -s "$published_image" ]]
 grep -q 'Using cached OS base image' "$tmp/reused"
 rm -f -- "$published_image"
+rm -f "$CALL_LOG.absent"
 
 # If the guest ignores poweroff, wrapper fallback destroy addresses only the
 # UUID returned by kvm-vm, never the reusable domain name.
@@ -123,7 +139,11 @@ printf 'virsh %s\n' "$*" >>"$CALL_LOG"
 case "$*" in
   *domblklist*) disk=$(find "$TEST_BASE_DIR" -name '*.building.qcow2' -print -quit); printf ' Type Device Target Source\n------------------------------------------------\n file disk vda %s\n' "$disk";;
   *domuuid*) printf '%s\n' "$DOMAIN_UUID";;
-  *domstate*) printf 'running\n';;
+  *domstate*)
+    if [[ -e $CALL_LOG.absent ]]; then echo 'error: Domain not found' >&2; exit 1; fi
+    if [[ -e $CALL_LOG.stopped ]]; then echo 'shut off'; else echo paused; fi ;;
+  *destroy*) [[ ${DESTROY_FAIL:-0} == 0 ]] || exit 1; touch "$CALL_LOG.stopped" ;;
+  *undefine*) touch "$CALL_LOG.absent" ;;
   *) exit 0;;
 esac
 SH
@@ -134,6 +154,11 @@ chmod +x "$mock_repo/scripts/kvm-vm" "$bin/virsh" "$bin/sleep"
 sed -i 's/deadline=$((SECONDS + 180))/deadline=$SECONDS/' "$mock_repo/scripts/kvm-base-image"
 export DOMAIN_UUID=11111111-1111-4111-8111-111111111111
 : >"$CALL_LOG"
+export DESTROY_FAIL=1
+if "$mock_repo/scripts/kvm-base-image" ensure "$tmp/source.iso" "$tmp/kickstart.ks" molecule 10 default qemu:///system >"$tmp/out" 2>&1; then exit 1; fi
+[[ -n $(find "$base_dir" -name '*.building.qcow2' -print -quit) ]]
+find "$base_dir" -name '*.building.qcow2' -delete
+unset DESTROY_FAIL
 "$mock_repo/scripts/kvm-base-image" ensure "$tmp/source.iso" "$tmp/kickstart.ks" molecule 10 default qemu:///system >"$tmp/forced" 2>&1
 grep -qi 'forcing shutdown' "$tmp/forced"
 grep -q '^virsh --connect qemu:///system destroy 11111111-1111-4111-8111-111111111111$' "$CALL_LOG"

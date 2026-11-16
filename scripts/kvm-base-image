@@ -23,15 +23,15 @@ find_base() {
     printf 'Invalid OS key for KVM base-image lookup: %s\n' "$os_key" >&2
     return 2
   }
-  [[ -r "$kickstart" ]] || return 1
+  [[ -f "$kickstart" && -r "$kickstart" ]] || return 1
   kickstart_hash=$(sha256sum "$kickstart" | awk '{print $1}')
   filename_pattern="${os_key}-${disk_size}-${ssh_user}-${kickstart_hash:0:16}-*-r${revision}.qcow2"
   # Match only basenames beneath base_dir: neither glob metacharacters in the
   # configured directory nor slashes in other filename fields can escape it.
-  mapfile -d '' matches < <(find "$base_dir" -maxdepth 1 -type f -name "$filename_pattern" -print0 2>/dev/null)
+  mapfile -d '' matches < <(find "$base_dir" -maxdepth 1 -type f -name "$filename_pattern" -print0 2>/dev/null | LC_ALL=C sort -z)
   ((${#matches[@]})) || return 1
   for candidate in "${matches[@]}"; do
-    [[ -s "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
+    [[ -f "$candidate" && -r "$candidate" && -s "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
   done
   return 1
 }
@@ -163,13 +163,29 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
         actual_uuid=$(virsh --connect "$uri" domuuid "$base_domain" 2>/dev/null) || return 1
         [[ "${actual_uuid,,}" == "${base_domain_uuid,,}" ]]
       }
+      remove_base_domain() {
+        local state
+        base_domain_is_owned || return 1
+        state=$(LC_ALL=C virsh --connect "$uri" domstate "$base_domain_uuid") || return 1
+        if [[ $state != 'shut off' && $state != shutoff ]]; then
+          virsh --connect "$uri" destroy "$base_domain_uuid" >/dev/null || return 1
+          state=$(LC_ALL=C virsh --connect "$uri" domstate "$base_domain_uuid") || return 1
+          [[ $state == 'shut off' || $state == shutoff ]] || return 1
+        fi
+        virsh --connect "$uri" undefine "$base_domain_uuid" >/dev/null || return 1
+        if state=$(LC_ALL=C virsh --connect "$uri" domstate "$base_domain_uuid" 2>&1); then return 1; fi
+        grep -Eiq '(^|[[:space:]])(Domain not found|no domain with matching (name|uuid)|domain .* not found)(:|[[:space:]]|$)' <<<"$state"
+      }
       cleanup() {
         if [[ "$base_domain_defined" == true && -n "$base_domain_uuid" ]]; then
-          if base_domain_is_owned; then
-            virsh --connect "$uri" destroy "$base_domain_uuid" >/dev/null 2>&1 || true
-            virsh --connect "$uri" undefine "$base_domain_uuid" >/dev/null 2>&1 || true
+          if ! remove_base_domain; then
+            printf 'Unable to verify base VM removal; preserving storage and recovery directory: %s\n' "$work_dir" >&2
+            return
           fi
         fi
+        # A failed child owns its cleanup decision. Never erase its recovery
+        # directory while a disk it deliberately preserved still exists.
+        if [[ $base_disk_owned != true && -n $base_disk && -e $base_disk ]]; then return; fi
         if [[ "$base_disk_owned" == true && -n "$base_disk" && -e "$base_disk" ]]; then
           rm -f -- "$base_disk"
         fi
@@ -221,17 +237,11 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
       done
       if [[ ${state:-} != "shut off" ]]; then
         printf 'Base VM did not shut down cleanly; forcing shutdown before sealing.\n' >&2
-        base_domain_is_owned || {
-          printf 'Base VM UUID changed unexpectedly before shutdown: %s\n' "$base_domain" >&2
-          exit 1
-        }
-        "${virsh_cmd[@]}" destroy "$base_domain_uuid" >/dev/null
       fi
-      base_domain_is_owned || {
-        printf 'Base VM UUID changed unexpectedly before undefine: %s\n' "$base_domain" >&2
+      remove_base_domain || {
+        printf 'Unable to verify base VM removal before sealing: %s\n' "$base_domain" >&2
         exit 1
       }
-      "${virsh_cmd[@]}" undefine "$base_domain_uuid" >/dev/null
       base_domain_defined=false
       prepare_image_for_sysprep "$base_disk"
       virt-sysprep --operations defaults -a "$base_disk" >&2
