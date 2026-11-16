@@ -3,6 +3,25 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
+cat >"$tmp/domiflist" <<'EOF'
+Interface  Type      Source       Model    MAC
+-------------------------------------------------------
+vnet0      network   default      virtio   52:54:00:ab:cd:ef
+vnet1      bridge   br-test      virtio   52:54:00:11:22:33
+EOF
+expected_mac=52:54:00:ab:cd:ef
+[[ $(awk '$2 == "network" && $5 ~ /^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$/ {print tolower($5); exit}' <"$tmp/domiflist") == "$expected_mac" ]] || {
+  echo 'Source domiflist MAC parser selected an incorrect MAC.' >&2
+  exit 1
+}
+[[ $(awk '$2 == "network" && $5 ~ /^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$/ {print tolower($5); exit}' <"$tmp/domiflist") == "$expected_mac" ]] || {
+  echo 'Clone domiflist MAC parser selected an incorrect MAC.' >&2
+  exit 1
+}
+if printf 'Interface Type Source Model MAC\nvnet0 network default virtio invalid\n' | awk '$2 == "network" && $5 ~ /^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$/ {print tolower($5); exit}' | grep -q .; then
+  echo 'Domiflist MAC parser accepted an invalid MAC.' >&2
+  exit 1
+fi
 mkdir "$tmp/role"
 if IDARSI_RUN_NESTED_KVM_TEST=1 "$root/scripts/test-nested-kvm" --role-path "$tmp/role" "$tmp/missing.iso" >"$tmp/out" 2>&1; then
   echo 'Expected invalid role path to fail.' >&2
@@ -31,6 +50,10 @@ fi
 grep -q 'provide a readable Rocky 10 install ISO' "$tmp/out"
 IDARSI_RUN_NESTED_KVM_TEST=0 "$root/scripts/test-nested-kvm" --help >/dev/null
 "$root/scripts/render-nested-kvm-playbook" "$tmp/playbook.yml" inner-test
+iso_memory=$(sed -n 's/^            memory_mb: //p' "$tmp/playbook.yml")
+iso_vcpus=$(sed -n 's/^            vcpus: //p' "$tmp/playbook.yml")
+iso_disk=$(sed -n 's/^            disk_gb: //p' "$tmp/playbook.yml")
+[[ $iso_memory == 2048 && $iso_vcpus == 2 && $iso_disk == 10 ]]
 grep -Fq '    kvm_network: "idarsi-test"' "$tmp/playbook.yml"
 grep -Fq '      kvm:' "$tmp/playbook.yml"
 grep -Fq '          - name: "inner-test"' "$tmp/playbook.yml"
@@ -39,10 +62,31 @@ grep -Fq '                address: "192.168.250.210/24"' "$tmp/playbook.yml"
 grep -Fq '                gateway: "192.168.250.1"' "$tmp/playbook.yml"
 grep -Fq '                nameservers: ["192.168.250.1"]' "$tmp/playbook.yml"
 "$root/scripts/render-nested-kvm-playbook" "$tmp/image-playbook.yml" image-test '/var/lib/libvirt/images/inner-test.qcow2'
+image_memory=$(sed -n 's/^            memory_mb: //p' "$tmp/image-playbook.yml")
+image_vcpus=$(sed -n 's/^            vcpus: //p' "$tmp/image-playbook.yml")
+image_disk=$(sed -n 's/^            disk_gb: //p' "$tmp/image-playbook.yml")
+[[ $image_memory == 1024 && $image_vcpus == 1 && $image_disk == 10 ]]
 grep -Fq '          - name: "image-test"' "$tmp/image-playbook.yml"
 grep -Fq '              type: "image"' "$tmp/image-playbook.yml"
 grep -Fq '              path: "/var/lib/libvirt/images/inner-test.qcow2"' "$tmp/image-playbook.yml"
 ! grep -Fq 'kickstart:' "$tmp/image-playbook.yml"
+dominfo_iso=$'Max memory: 2097152 KiB\nCPU(s): 2'
+domblkinfo_iso=$'Capacity: 10737418240 bytes'
+printf '%s\n--- DOMBLKINFO ---\n%s\n' "$dominfo_iso" "$domblkinfo_iso" | \
+  python3 "$root/scripts/check-nested-kvm-resources.py" "$iso_memory" "$iso_vcpus" "$iso_disk"
+if printf '%s\n--- DOMBLKINFO ---\n%s\n' "$dominfo_iso" "$domblkinfo_iso" | \
+  python3 "$root/scripts/check-nested-kvm-resources.py" "$image_memory" "$image_vcpus" "$image_disk" >"$tmp/out" 2>&1; then
+  echo 'Expected ISO resource fixture to fail image-rendered resource assertions.' >&2
+  exit 1
+fi
+dominfo_image=$'Max memory: 1048576 KiB\nCPU(s): 1'
+printf '%s\n--- DOMBLKINFO ---\n%s\n' "$dominfo_image" "$domblkinfo_iso" | \
+  python3 "$root/scripts/check-nested-kvm-resources.py" "$image_memory" "$image_vcpus" "$image_disk"
+if printf '%s\n--- DOMBLKINFO ---\n%s\n' "$dominfo_image" "$domblkinfo_iso" | \
+  python3 "$root/scripts/check-nested-kvm-resources.py" "$iso_memory" "$iso_vcpus" "$iso_disk" >"$tmp/out" 2>&1; then
+  echo 'Expected image resource fixture to fail ISO-rendered resource assertions.' >&2
+  exit 1
+fi
 ! grep -Eq '^            network:' "$tmp/image-playbook.yml"
 grep -Eq '^            network:' "$tmp/playbook.yml"
 grep -Fq '                address: "192.168.250.210/24"' "$tmp/playbook.yml"

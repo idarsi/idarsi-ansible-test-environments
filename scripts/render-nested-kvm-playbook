@@ -43,9 +43,11 @@ output.write_text(
     + vm_name
     + '''
             hostname: "nested-role-integration.example.test"
-            memory_mb: 2048
-            vcpus: 2
-            disk_gb: 10
+            memory_mb: '''
+    + ("1024\n" if len(sys.argv) == 4 else "2048\n")
+    + '''            vcpus: '''
+    + ("1\n" if len(sys.argv) == 4 else "2\n")
+    + '''            disk_gb: 10
             source:
 '''
     + source

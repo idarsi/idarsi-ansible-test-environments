@@ -165,6 +165,9 @@ for ((i=0; i<360; i++)); do
 done
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "sudo virsh dominfo '$inner' >/dev/null && ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'test -f /etc/rocky-release'"
+resource_output=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$inner'; printf '\\n--- DOMBLKINFO ---\\n'; sudo virsh domblkinfo '$inner' vda")
+printf '%s\n' "$resource_output" | python3 "$repo_root/scripts/check-nested-kvm-resources.py" 2048 2 10
 hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
   "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$inner_address 'hostnamectl --static'")
 [[ $hostname == nested-role-integration.example.test ]] || {
@@ -196,7 +199,7 @@ else
   [[ $reboot_status == 255 ]] || { printf 'FAIL: reboot command failed with SSH status %s.\n' "$reboot_status" >&2; exit 1; }
 fi
 source_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
-  "sudo virsh domiflist '$inner' | awk '\$3 == \"network\" {print tolower(\$5); exit}'")
+  "sudo virsh domiflist '$inner'" | "$repo_root/scripts/virsh-network-mac")
 [[ $source_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]] || { printf 'FAIL: invalid source NIC MAC: %q\n' "$source_mac" >&2; exit 1; }
 lease_deadline=$((SECONDS + 180)); source_lease=
 while ((SECONDS < lease_deadline)); do
@@ -241,7 +244,7 @@ clone_deadline=$((SECONDS + 180)); clone_state=unavailable; clone_lease=
 while ((SECONDS < clone_deadline)); do
   clone_state=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domstate '$image_vm'" 2>/dev/null | tr -d '\r') || clone_state=unavailable
   if [[ $clone_state == running ]]; then
-    clone_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domiflist '$image_vm' | awk '\$3 == \"network\" {print tolower(\$5); exit}'" 2>/dev/null) || clone_mac=
+    clone_mac=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domiflist '$image_vm'" 2>/dev/null | "$repo_root/scripts/virsh-network-mac") || clone_mac=
     if [[ $clone_mac =~ ^([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}$ ]]; then
       clone_lease=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "sudo virsh domifaddr '$image_vm' --source lease | awk -v mac='$clone_mac' 'tolower(\$2)==mac && \$4 ~ /^[0-9]+\\./ {sub(/\\/.*/,\"\",\$4); print \$4}'" 2>/dev/null) || clone_lease=
       if validate_ipv4 "$clone_lease" && wait_guest_ssh "$clone_lease" "$((SECONDS + 15))"; then break; fi
@@ -253,6 +256,9 @@ if ((SECONDS >= clone_deadline)); then
   printf 'FAIL: clone %s did not become running with a valid DHCP lease and reachable Rocky SSH before timeout (state=%s, MAC=%s, lease=%s).\n' "$image_vm" "$clone_state" "${clone_mac:-unavailable}" "${clone_lease:-unavailable}" >&2
   exit 1
 fi
+resource_output=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" \
+  "sudo virsh dominfo '$image_vm'; printf '\\n--- DOMBLKINFO ---\\n'; sudo virsh domblkinfo '$image_vm' vda")
+printf '%s\n' "$resource_output" | python3 "$repo_root/scripts/check-nested-kvm-resources.py" 1024 1 10
 clone_hostname=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$clone_lease 'hostnamectl --static'")
 [[ $clone_hostname == nested-role-integration.example.test ]] || { printf 'FAIL: image clone static hostname is %q, expected nested-role-integration.example.test.\n' "$clone_hostname" >&2; exit 1; }
 clone_ipv4=$(ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "molecule@$address" "ssh -F /dev/null -i \$HOME/.ssh/nested-kvm/inner_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null molecule@$clone_lease 'ip -4 -o address show scope global'" | awk '{split($4, a, "/"); print a[1]}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
