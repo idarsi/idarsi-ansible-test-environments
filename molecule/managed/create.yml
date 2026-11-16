@@ -1,0 +1,19 @@
+---
+- name: "Create identity-owned resources for an isolated run"
+  hosts: "localhost"
+  connection: "local"
+  gather_facts: false
+  become: false
+  tasks:
+    - name: "Require the managed run supervisor"
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'IDARSI_RUN_ID') | length > 0
+    - name: "Create resources and write logical instance mapping synchronously"
+      ansible.builtin.command:
+        argv:
+          - "{{ lookup('env', 'IDARSI_TEST_ENVIRONMENT') }}/scripts/test-run"
+          - "_lifecycle"
+          - "create"
+          - "{{ lookup('env', 'IDARSI_RUN_ID') }}"
+      changed_when: true

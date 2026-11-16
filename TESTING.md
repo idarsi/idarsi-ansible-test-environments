@@ -1,5 +1,61 @@
 # Testing
 
+`test_isolated_private.py` checks private non-export publication states, actual
+object recovery reconciliation, strict legacy fallback, Netbox-shaped omitted
+metadata without foreign header reads, explicit references and query failures,
+provenance mismatches, hardlinks, inode substitution and pending dependencies.
+Backend queries are mocked; these checks do not replace runtime acceptance.
+
+## Isolated-run launcher
+
+The experimental `scripts/test-run` contract and runtime acceptance matrix are
+documented in [isolated test runs](docs/isolated-test-runs.md). Its cheap tests
+use temporary state and mocked backend commands:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_isolated*.py' -v
+```
+
+They cover concurrent allocator processes, discovery failures, inactive-network
+and route conflicts, resource replacement, retained leases after cleanup
+failure, worker start journaling/session recovery, and managed/legacy guards.
+They do not demonstrate real Podman/KVM or all pinned Molecule compatibility.
+The repository-checks workflow runs these unit tests on pull requests and its
+weekly schedule, using Python 3.12 and no backend services.
+Actual effective-config smoke tests run when an existing Molecule installation
+is active (otherwise explicitly skipped). Local minimum/current checks cover
+inherited parallel and shared-state configuration. Filesystem fault-boundary
+tests use only private temporary directories, never the real KVM storage
+directory. They cover unnamed-inode publication, EEXIST, replacement refusal,
+directory-fsync ordering, independent data disks and journal-write interleaving.
+`StorageTraversalTests` additionally exercises search-only ancestors as an
+unprivileged user, target-directory read/fsync requirements, symlink refusal
+and unchanged trust checks. Its permission-denial cases explicitly skip under
+root; all permission changes are confined to temporary test fixtures.
+Focused `test_isolated_lifecycle.py` regressions launch only tiny local Python
+processes in journalled test sessions: a writer survives its parent's timeout
+or nonzero exit, in-session destroy defers removal, and supervisor cleanup stops
+the writer before simulated deletion. Foreign-storage tests mock all backend
+queries and cover nested backing stores, image chains missing from inactive
+XML, pool/volume paths, inode aliases, query failures and partial disk-cleanup
+retry. No real libvirt, Podman, guestfs or QEMU processes are used by these tests.
+`test_isolated_graph.py` adds metadata-only concurrent cleanup evidence:
+complete live XML without image opens, matching private managed captures for
+inaccessible active disks, raw omission versus explicit qcow2 termination,
+independent persistent references, rejected forged/stale/incomplete records,
+pending dependency claims, and shared-lock/capture-before-start ordering.
+Its backend queries are mocked; this is not concurrent VM runtime evidence.
+`test_isolated_network.py` covers network teardown against direct bridges,
+network names/UUIDs, network/kernel aliases, resolved actual interfaces and
+divergent live/persistent definitions. It asserts no `net-destroy` on a
+dependency, configuration mismatch or uncertain query, and retains successful
+cleanup for proven-unrelated interfaces. Every backend and kernel-network query
+in these tests is mocked.
+The tester owns concurrent same-scenario, interrupt and crash-recovery runtime
+acceptance. No roles have been migrated automatically.
+
+## Existing environment checks
+
 This repository prepares a reusable Rocky Linux 10 or Fedora 43/44 host for Molecule tests in
 Idarsi Ansible role repositories. The shared controller venv supports two
 target backends: Podman for fast tests and KVM + Kickstart for full virtual

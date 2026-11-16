@@ -1,5 +1,11 @@
 # Idarsi Ansible Test Environments
 
+Experimental concurrent-run isolation is available through
+[`scripts/test-run`](docs/isolated-test-runs.md). It uses per-run networks,
+subnets and identity-checked cleanup. It is opt-in; legacy commands are
+unchanged. See the documented initial scope and pending runtime acceptance
+before migrating scenarios.
+
 This repository prepares a Rocky Linux 10 or Fedora 43/44 host for running Molecule tests in
 Idarsi Ansible role repositories. Molecule scenarios stay in each role and
 choose one of two target backends:
