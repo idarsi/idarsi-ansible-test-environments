@@ -35,7 +35,8 @@ for environment in ansible-min ansible-current ansible-next; do
     "ansible-runner==$(global_pin ansible_runner)" \
     "ansible-lint==$(environment_pin ansible_lint "$key")" \
     "molecule==$(environment_pin molecule "$key")" \
-    "molecule-plugins[podman]==$(environment_pin molecule_podman "$key")"; do
+    "molecule-plugins[podman]==$(environment_pin molecule_podman "$key")" \
+    "setuptools==$(global_pin setuptools)"; do
     [[ $(grep -Fxc "$pin" "$requirements") -eq 1 ]] || {
       printf 'Expected exactly one pin %s in %s\n' "$pin" "$requirements" >&2
       exit 1

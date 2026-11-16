@@ -3,3 +3,4 @@ ansible-runner==2.4.3
 ansible-lint==6.22.2
 molecule==6.0.3
 molecule-plugins[podman]==23.5.0
+setuptools==80.9.0

@@ -15,6 +15,7 @@ for environment in ansible-min ansible-current ansible-next; do
   ansible_lint_pin=$(yq -r ".ansible_lint.$key" "$versions")
   molecule_pin=$(yq -r ".molecule.$key" "$versions")
   molecule_podman_pin=$(yq -r ".molecule_podman.$key" "$versions")
+  setuptools_pin=$(yq -r '.setuptools' "$versions")
   requirements="$repo_root/environments/$environment/requirements.txt"
   cat >"$requirements" <<EOF
 ansible-core==$ansible_core
@@ -22,6 +23,7 @@ ansible-runner==$ansible_runner_pin
 ansible-lint==$ansible_lint_pin
 molecule==$molecule_pin
 molecule-plugins[podman]==$molecule_podman_pin
+setuptools==$setuptools_pin
 EOF
   export ANSIBLE_POSIX="$ansible_posix" CONTAINERS_PODMAN="$containers_podman"
   yq -i '(.collections[] | select(.name == "ansible.posix").version) = strenv(ANSIBLE_POSIX)' "$repo_root/environments/$environment/requirements.yml"

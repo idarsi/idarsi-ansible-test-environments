@@ -24,6 +24,7 @@ molecule_podman:
   min: "23.5.0"
   current: "26.7.15"
   next: "26.7.15"
+setuptools: "80.9.0"
 collections:
   ansible_posix: "2.2.2"
   containers_podman: "1.20.2"
