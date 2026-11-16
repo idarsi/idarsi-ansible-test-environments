@@ -77,6 +77,11 @@ forwarding. These focused checks do not replace runtime KVM/SELinux verification
 | `ansible-current` | 2.20.8 | 26.8.0 | 3.12 | Default development baseline |
 | `ansible-next` | 2.21.3 | 26.8.0 | 3.14 | Forward compatibility |
 
+Host support does not imply every controller line supports every guest Python.
+In particular, `ansible-min` (Core 2.15) cannot target Fedora 44's default
+Python 3.14; use a compatible controller line for that guest. Pins remain
+environment-specific.
+
 Run `./install.sh [podman|kvm|all] [ansible-min|ansible-current|ansible-next]`
 to prepare the host and selected venv. Activate the venv before running the
 role's Molecule scenario. For KVM, the host also needs firmware virtualization
@@ -102,6 +107,9 @@ wrapper requires an official Fedora Server DVD ISO filename and disables base
 image reuse to ensure the supplied ISO is actually tested. It permits a
 7200-second installation and remains a manual KVM check, not part of
 `make validate`.
+The VM-free `bash tests/test-prepare-kvm-base-images.sh` fixture verifies all
+five OS source/template mappings with mocked base-image and host-permission
+commands; it does not prepare images or alter host directories.
 To repair an existing environment's Fedora 44 activation hook without rebuilding
 it or installing dependencies, run:
 

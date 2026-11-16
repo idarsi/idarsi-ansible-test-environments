@@ -20,6 +20,9 @@ class ResourceAssertionsTest(unittest.TestCase):
     def test_accepts_expected_blueprint_resources(self) -> None:
         RESOURCE_CHECK.check(self.info, self.block, 2048, 2, 10)
 
+    def test_accepts_image_blueprint_resources(self) -> None:
+        RESOURCE_CHECK.check("Max memory: 1048576 KiB\nCPU(s): 1\n", self.block, 1024, 1, 10)
+
     def test_rejects_mismatched_blueprint_resource(self) -> None:
         with self.assertRaisesRegex(ValueError, "resource mismatch"):
             RESOURCE_CHECK.check(self.info, self.block, 1024, 2, 10)

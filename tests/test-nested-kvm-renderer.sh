@@ -23,12 +23,16 @@ assert 'state: "install"' in install and 'type: "iso"' in install
 assert 'state: "vm_present"' in image and 'type: "image"' in image
 assert 'path: "/var/lib/libvirt/images/source.qcow2"' in image
 assert 'purge_data_on_remove: false' in image
+assert 'memory_mb: 1024' in image and 'vcpus: 1' in image
+assert 'memory_mb: 2048' in install and 'vcpus: 2' in install
+assert 'memory_mb: 2048' in remove and 'vcpus: 2' in remove
 assert 'state: "vm_absent"' in remove and 'purge_data_on_remove: true' in remove
 assert 'state: "validate"' in validate
 assert 'state: "absent"' in absent
 for path in root.glob("*.yml"):
     text = path.read_text()
     assert "roles:\n    - role:" in text
+    assert "disk_gb: 10" in text
 print("PASS: nested KVM renderer state and purge assertions")
 PY
 grep -Fq 'run_role_state "$image_vm" validate false --check' "$root/scripts/test-nested-kvm"

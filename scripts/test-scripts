@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-for script in install.sh uninstall.sh verify-install-kvm.sh scripts/setup-host scripts/setup-venv scripts/prepare-kvm-install-source scripts/prepare-kvm-base-images scripts/kvm-base-image scripts/kvm-base-image-os-key scripts/kvm-base-dir scripts/kvm-vm scripts/kvm-smoke-tmux scripts/kvm-console-wait scripts/check-dependencies scripts/update-dependencies scripts/test-scripts scripts/test-rhel-install-source scripts/check-nested-kvm-capability scripts/check-nested-kvm-idempotence scripts/test-nested-kvm scripts/cleanup-nested-kvm scripts/virsh-network-mac tests/test-virsh-network-mac.sh; do
+for script in install.sh uninstall.sh verify-install-kvm.sh verify-install-fedora44-kvm.sh tests/test-kvm-smoke-launcher.sh scripts/setup-host scripts/setup-venv scripts/prepare-kvm-install-source scripts/prepare-kvm-base-images scripts/kvm-base-image scripts/kvm-base-image-os-key scripts/kvm-base-dir scripts/kvm-vm scripts/kvm-smoke-tmux scripts/kvm-console-wait scripts/check-dependencies scripts/update-dependencies scripts/test-scripts scripts/test-rhel-install-source scripts/check-nested-kvm-capability scripts/check-nested-kvm-idempotence scripts/test-nested-kvm scripts/cleanup-nested-kvm scripts/virsh-network-mac tests/test-virsh-network-mac.sh tests/test-prepare-kvm-base-images.sh; do
   bash -n "$repo_root/$script"
 done
 bash -n "$repo_root/tests/test-kvm-image-validation.sh"
@@ -27,16 +27,12 @@ bash "$repo_root/tests/test-kvm-base-image-ownership.sh"
 bash "$repo_root/tests/test-fedora44-kickstart.sh"
 bash "$repo_root/tests/test-kvm-image-validation.sh"
 bash "$repo_root/tests/test-kvm-ssh-user-forwarding.sh"
-bash -n "$repo_root/scripts/virsh-network-mac"
 bash -n "$repo_root/tests/test-nested-kvm-cli.sh"
 bash "$repo_root/tests/test-kvm-image-cache.sh"
 bash "$repo_root/tests/test-kvm-host-validation.sh"
 bash "$repo_root/tests/test-check-dependencies.sh"
 "$repo_root/tests/test-activation-hook.sh"
 grep -Fq 'IDARSI_MOLECULE_COLLECTIONS_FILE' "$repo_root/docs/role-integration.md"
-for script in install.sh uninstall.sh verify-install-kvm.sh verify-install-fedora44-kvm.sh tests/test-kvm-smoke-launcher.sh scripts/setup-host scripts/setup-venv scripts/prepare-kvm-install-source scripts/prepare-kvm-base-images scripts/kvm-base-image scripts/kvm-base-dir scripts/kvm-vm scripts/kvm-smoke-tmux scripts/kvm-console-wait scripts/check-dependencies scripts/update-dependencies scripts/test-scripts scripts/test-rhel-install-source scripts/check-nested-kvm-capability scripts/test-nested-kvm; do
-  bash -n "$repo_root/$script"
-done
 if output=$(bash "$repo_root/scripts/kvm-smoke-tmux" ansible-current /nonexistent unsupported 2>&1); then
   printf 'Unsupported smoke selector unexpectedly succeeded.\n' >&2
   exit 1
@@ -54,13 +50,8 @@ grep -Fxq 'sudo' "$fedora_kickstart"
 grep -Fxq 'python3' "$fedora_kickstart"
 grep -Fq 'install_timeout: 7200' "$fedora_scenario"
 grep -Fq 'ansible_facts.distribution_major_version == "44"' "$repo_root/molecule/kvm-smoke-fedora44/verify.yml"
-base_prep="$repo_root/scripts/prepare-kvm-base-images"
-grep -Fq '.kvm-install-source-fedora44' "$base_prep"
-grep -Fq 'fedora44)' "$base_prep"
-grep -Fq 'fedora-44.ks.tmpl' "$base_prep"
-grep -Fq 'rocky9-10.ks.tmpl' "$base_prep"
+bash "$repo_root/tests/test-prepare-kvm-base-images.sh"
 bash "$repo_root/tests/test-kvm-smoke-launcher.sh"
-bash "$repo_root/tests/test-kvm-base-image-os-key.sh"
 bash "$repo_root/tests/test-nested-kvm-capability.sh"
 bash "$repo_root/tests/test-nested-kvm-cleanup.sh"
 bash "$repo_root/tests/test-nested-kvm-cli.sh"

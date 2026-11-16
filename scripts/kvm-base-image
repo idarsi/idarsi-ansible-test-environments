@@ -13,6 +13,7 @@ revision=${KVM_BASE_IMAGE_REVISION:-1}
 image_owner=${SUDO_USER:-$(id -un)}
 
 usage() {
+  printf 'Usage: %s source-os-key <install-source|base-only:os-key>\n' "$0" >&2
   printf 'Usage: %s find <os-key> <kickstart-template> <ssh-user> <disk-size-gb>\n' "$0" >&2
   printf '       %s ensure <install-source|base-only:os-key> <kickstart-template> <ssh-user> <disk-size-gb> <network> <libvirt-uri>\n' "$0" >&2
 }
