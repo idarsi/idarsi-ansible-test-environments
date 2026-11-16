@@ -79,6 +79,15 @@ original full ISO install path, or change `KVM_BASE_IMAGE_REVISION` to build a
 fresh base after changing OS preparation. The installer prepares the
 base-image directory so Molecule does not need an interactive sudo prompt.
 
+Fedora 44 images use `.kvm-install-source-fedora44` (set up by the Fedora 44
+source preparation flow) and the Fedora 44 Kickstart. To prepare the image
+before running Molecule, run `scripts/prepare-kvm-base-images` from an
+interactive terminal after source setup. This one-time command may prompt for
+sudo credentials while fixing ownership and permissions; subsequent Molecule
+runs reuse the prepared base image without prompting. The helper prepares
+Rocky and RHEL images with the Rocky Kickstart, and Fedora 44 with its matching
+Fedora Kickstart.
+
 ## Add the shared scenario
 
 Copy the example files into the role repository and edit the ISO path. Use the
@@ -90,6 +99,12 @@ examples/molecule-kvm/rocky9-10.ks.tmpl  -> role/molecule/kvm/rocky9-10.ks.tmpl
 examples/molecule-kvm/fedora-43.ks.tmpl  -> role/molecule/kvm/fedora-43.ks.tmpl
 examples/molecule-kvm/fedora-44.ks.tmpl  -> role/molecule/kvm/fedora-44.ks.tmpl
 ```
+
+The Fedora 44 Kickstart uses the `@core` package group, which is available on
+the Fedora Server DVD. Do not substitute `@^minimal-environment`: that
+environment group is absent from the DVD repository metadata and causes
+Anaconda's package selection to stall. The template explicitly adds
+`openssh-server`, `sudo`, and `python3` for Molecule access and provisioning.
 
 The KVM scenario also needs the role's existing converge and verify playbooks.
 Copy those from its current Molecule scenario, or set their paths in the KVM
@@ -195,3 +210,29 @@ public key), and boots it with `virt-install --import`. The source image is
 never modified or removed. Do not combine `image_path` with a nonempty
 `install_source`. This import path is opt-in/manual; it does not replace ISO
 installation coverage.
+
+For a diagnostic Fedora 44 installation, use the dedicated scenario and
+wrapper (the ISO path is passed explicitly, without relying on activation-hook
+state):
+
+```bash
+source .venv/ansible-current/bin/activate
+./verify-install-fedora44-kvm.sh "$(cat .kvm-install-source-fedora44)"
+```
+
+Use the official Fedora Server DVD x86_64 ISO named
+`Fedora-Server-dvd-x86_64-44-*.iso` (for example, the release ISO from
+`https://getfedora.org/server/`). The wrapper rejects other filenames; this
+filename check is a guard against accidentally installing a different distro,
+not cryptographic provenance verification. Verify the ISO checksum/signature
+against Fedora's published release metadata before use.
+
+This uses `molecule/kvm-smoke-fedora44`, Fedora 44 Kickstart and the same
+shared KVM create/destroy, converge, tmux, logging, and serial-console flow.
+Its install timeout is 7200 seconds to allow observing the longer Fedora
+installer; Rocky remains at 3600 seconds. Fedora's tmux-launched Molecule
+command sets `KVM_BASE_IMAGE_MODE=off`, forcing installation from the supplied
+ISO rather than reusing cached base images. With base images disabled,
+`kvm-vm` does not infer an OS key from the Kickstart basename. The wrapper
+requires a readable local ISO, and the scenario verifies Fedora 44 and
+enforcing SELinux.

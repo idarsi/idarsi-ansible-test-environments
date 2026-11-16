@@ -4,14 +4,24 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 usage() {
-  printf 'Usage: %s <ansible-min|ansible-current|ansible-next> <Rocky-10-or-Fedora-44.iso>\n' "$0" >&2
+  printf 'Usage: %s <ansible-min|ansible-current|ansible-next> <local-install.iso> [rocky10|fedora44]\n' "$0" >&2
 }
 
-[[ $# -eq 2 ]] || { usage; exit 2; }
+[[ $# -ge 2 && $# -le 3 ]] || { usage; exit 2; }
 environment=$1
-iso=$(realpath "$2")
+scenario=${3:-rocky10}
 [[ "$environment" =~ ^ansible-(min|current|next)$ ]] || { usage; exit 2; }
-[[ -r "$iso" && -f "$iso" ]] || { printf 'Readable ISO file required: %s\n' "$iso" >&2; exit 1; }
+case "$scenario" in
+  rocky10) molecule_scenario=kvm-smoke; source_export=IDARSI_TEST_KVM_INSTALL_SOURCE_ROCKY10; base_mode_export= ;;
+  fedora44) molecule_scenario=kvm-smoke-fedora44; source_export=IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44; base_mode_export='export KVM_BASE_IMAGE_MODE=off;' ;;
+  *) usage; printf 'Unsupported smoke platform: %s\n' "$scenario" >&2; exit 2 ;;
+esac
+[[ -f "$2" && -r "$2" ]] || { printf 'Readable ISO file required: %s\n' "$2" >&2; exit 1; }
+iso=$(realpath "$2")
+if [[ "$scenario" == fedora44 && ! $(basename "$iso") =~ ^Fedora-Server-dvd-x86_64-44-[0-9][^/]*\.iso$ ]]; then
+  printf 'Fedora 44 smoke test requires an official Fedora Server DVD ISO filename (Fedora-Server-dvd-x86_64-44-*.iso): %s\n' "$(basename "$iso")" >&2
+  exit 1
+fi
 
 venv="$repo_root/.venv/$environment"
 molecule="$venv/bin/molecule"
@@ -21,7 +31,7 @@ molecule="$venv/bin/molecule"
 }
 command -v tmux >/dev/null || { printf 'tmux is missing; run ./install.sh kvm %s\n' "$environment" >&2; exit 1; }
 command -v virsh >/dev/null || { printf 'virsh is missing; run ./install.sh kvm %s\n' "$environment" >&2; exit 1; }
-"$repo_root/scripts/setup-host" check kvm
+"${IDARSI_KVM_SMOKE_SETUP_HOST:-$repo_root/scripts/setup-host}" check kvm
 
 before_domains=$(virsh --connect qemu:///system list --all --name | sed '/^$/d' | paste -sd '|')
 session="idarsi-kvm-smoke-$(date +%Y%m%d%H%M%S)-$$"
@@ -40,7 +50,7 @@ tmux split-window -v -t "$session" -c "$repo_root"
 tmux select-layout -t "$session" even-vertical
 tmux set-window-option -t "$session" remain-on-exit on
 
-molecule_command="export PATH=$(quote "$venv/bin"):\$PATH; export IDARSI_TEST_ENVIRONMENT=$(quote "$repo_root"); export IDARSI_TEST_KVM_INSTALL_SOURCE=$(quote "$iso"); export ANSIBLE_COLLECTIONS_PATH=$(quote "$venv/collections"):\${ANSIBLE_COLLECTIONS_PATH:-\$HOME/.ansible/collections:/usr/share/ansible/collections}; export ANSIBLE_VERBOSITY=3 ANSIBLE_NOCOLOR=1 NO_COLOR=1; set -o pipefail; $(quote "$molecule") --debug test -s kvm-smoke 2>&1 | tee $(quote "$molecule_log"); molecule_status=\${PIPESTATUS[0]}; printf '\\nMolecule exit status: %s\\nLog file: %s\\n' \"\$molecule_status\" $(quote "$molecule_log"); exit \"\$molecule_status\""
+molecule_command="export PATH=$(quote "$venv/bin"):\$PATH; export IDARSI_TEST_ENVIRONMENT=$(quote "$repo_root"); export $(quote "$source_export")=$(quote "$iso"); $base_mode_export export ANSIBLE_COLLECTIONS_PATH=$(quote "$venv/collections"):\${ANSIBLE_COLLECTIONS_PATH:-\$HOME/.ansible/collections:/usr/share/ansible/collections}; export ANSIBLE_VERBOSITY=3 ANSIBLE_NOCOLOR=1 NO_COLOR=1; set -o pipefail; $(quote "$molecule") --debug test -s $(quote "$molecule_scenario") 2>&1 | tee $(quote "$molecule_log"); molecule_status=\${PIPESTATUS[0]}; printf '\\nMolecule exit status: %s\\nLog file: %s\\n' \"\$molecule_status\" $(quote "$molecule_log"); exit \"\$molecule_status\""
 console_command="export IDARSI_KVM_PREEXISTING_DOMAINS=$(quote "$before_domains"); $(quote "$repo_root/scripts/kvm-console-wait")"
 
 tmux send-keys -t "$session:0.0" "$molecule_command" C-m

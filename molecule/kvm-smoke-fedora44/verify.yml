@@ -1,0 +1,22 @@
+---
+- name: Verify the Fedora 44 KVM smoke-test target
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Read SELinux mode
+      ansible.builtin.command: getenforce
+      changed_when: false
+      register: selinux_mode
+
+    - name: Inspect the smoke-test marker
+      ansible.builtin.stat:
+        path: /var/tmp/idarsi-molecule-smoke
+      register: smoke_marker
+
+    - name: Check Fedora 44 and its security baseline
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == "Fedora"
+          - ansible_facts.distribution_major_version == "44"
+          - smoke_marker.stat.exists
+          - selinux_mode.stdout == "Enforcing"

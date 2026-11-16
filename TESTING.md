@@ -28,6 +28,14 @@ it uses temporary files and mocked environment-creation commands, without
 network access or libvirt. Role behavior is verified by each role's own
 Molecule scenarios.
 
+The KVM diagnostic smoke tests include Rocky 10 and Fedora 44. A focused
+launcher mapping test mocks tmux and host checks; it verifies Rocky's default
+mapping and the explicit Fedora 44 mapping without starting KVM. The Fedora 44
+wrapper requires an official Fedora Server DVD ISO filename and disables base
+image reuse to ensure the supplied ISO is actually tested. It permits a
+7200-second installation and remains a manual KVM check, not part of
+`make validate`.
+
 An explicit manual nested-KVM integration test is available on a capable KVM
 host (not part of regular tests). After `./install.sh kvm` and configuring the
 Rocky 10 ISO and the KVM role checkout, run

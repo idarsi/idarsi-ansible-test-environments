@@ -13,6 +13,33 @@ bash "$repo_root/tests/test-kvm-host-validation.sh"
 bash "$repo_root/tests/test-check-dependencies.sh"
 "$repo_root/tests/test-activation-hook.sh"
 grep -Fq 'IDARSI_MOLECULE_COLLECTIONS_FILE' "$repo_root/docs/role-integration.md"
+for script in install.sh uninstall.sh verify-install-kvm.sh verify-install-fedora44-kvm.sh tests/test-kvm-smoke-launcher.sh scripts/setup-host scripts/setup-venv scripts/prepare-kvm-install-source scripts/prepare-kvm-base-images scripts/kvm-base-image scripts/kvm-base-dir scripts/kvm-vm scripts/kvm-smoke-tmux scripts/kvm-console-wait scripts/check-dependencies scripts/update-dependencies scripts/test-scripts scripts/test-rhel-install-source scripts/check-nested-kvm-capability scripts/test-nested-kvm; do
+  bash -n "$repo_root/$script"
+done
+if output=$(bash "$repo_root/scripts/kvm-smoke-tmux" ansible-current /nonexistent unsupported 2>&1); then
+  printf 'Unsupported smoke selector unexpectedly succeeded.\n' >&2
+  exit 1
+fi
+[[ "$output" == *"Unsupported smoke platform: unsupported"* ]]
+fedora_scenario="$repo_root/molecule/kvm-smoke-fedora44/molecule.yml"
+grep -Fq 'name: fedora44' "$fedora_scenario"
+grep -Fq 'IDARSI_TEST_KVM_INSTALL_SOURCE_FEDORA44' "$fedora_scenario"
+grep -Fq 'fedora-44.ks.tmpl' "$fedora_scenario"
+fedora_kickstart="$repo_root/examples/molecule-kvm/fedora-44.ks.tmpl"
+grep -Fxq '@core' "$fedora_kickstart"
+! grep -Fq 'minimal-environment' "$fedora_kickstart"
+grep -Fxq 'openssh-server' "$fedora_kickstart"
+grep -Fxq 'sudo' "$fedora_kickstart"
+grep -Fxq 'python3' "$fedora_kickstart"
+grep -Fq 'install_timeout: 7200' "$fedora_scenario"
+grep -Fq 'ansible_facts.distribution_major_version == "44"' "$repo_root/molecule/kvm-smoke-fedora44/verify.yml"
+base_prep="$repo_root/scripts/prepare-kvm-base-images"
+grep -Fq '.kvm-install-source-fedora44' "$base_prep"
+grep -Fq 'fedora44)' "$base_prep"
+grep -Fq 'fedora-44.ks.tmpl' "$base_prep"
+grep -Fq 'rocky9-10.ks.tmpl' "$base_prep"
+bash "$repo_root/tests/test-kvm-smoke-launcher.sh"
+bash "$repo_root/tests/test-kvm-base-image-os-key.sh"
 bash "$repo_root/tests/test-nested-kvm-capability.sh"
 bash "$repo_root/tests/test-nested-kvm-cli.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 "$repo_root/scripts/test-nested-ipv4.py"
