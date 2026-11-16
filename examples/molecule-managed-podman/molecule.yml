@@ -1,0 +1,20 @@
+---
+driver:
+  name: "default"
+  options:
+    managed: true
+
+platforms:
+  - name: "node"
+    image: "localhost/ansible-rocky10:latest"
+    pre_build_image: true
+    command: ["/bin/sleep", "infinity"]
+
+provisioner:
+  name: "ansible"
+  playbooks:
+    create: "${IDARSI_TEST_ENVIRONMENT}/molecule/managed/create.yml"
+    destroy: "${IDARSI_TEST_ENVIRONMENT}/molecule/managed/destroy.yml"
+
+verifier:
+  name: "ansible"

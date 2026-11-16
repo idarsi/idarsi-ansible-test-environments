@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n ${IDARSI_RUN_ID:-} && ${1:-} != find ]]; then
+  printf 'Managed runs do not build shared base images; prepare caches separately and use image_path, or use direct ISO installation.\n' >&2
+  exit 2
+fi
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
 cache_root=${XDG_CACHE_HOME:-$HOME/.cache}/idarsi-ansible-test-environments/kvm-base-locks

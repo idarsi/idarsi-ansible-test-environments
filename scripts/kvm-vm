@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n ${IDARSI_RUN_ID:-} ]]; then
+  printf 'Managed runs must use molecule/managed/create.yml and destroy.yml; the legacy VM launcher is disabled in this context.\n' >&2
+  exit 2
+fi
+
 usage() {
   printf 'Usage: %s create|create-image|destroy|stop|start <molecule-instance> [install-source kickstart-template|qcow2-image]\n' "$0" >&2
 }

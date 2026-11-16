@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Supervise private same-user Molecule runs without new Python dependencies."""
+
+from isolated_runs.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

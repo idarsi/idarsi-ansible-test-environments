@@ -1,0 +1,25 @@
+---
+driver:
+  name: "default"
+  options:
+    managed: true
+
+platforms:
+  - name: "node"
+    image_path: "${TEST_RUN_BASE_IMAGE}"
+    ssh_user: "molecule"
+    memory_mb: 4096
+    vcpus: 2
+    install_timeout: 600
+    data_disks:
+      - name: "osd1"
+        size_gb: 20
+
+provisioner:
+  name: "ansible"
+  playbooks:
+    create: "${IDARSI_TEST_ENVIRONMENT}/molecule/managed/create.yml"
+    destroy: "${IDARSI_TEST_ENVIRONMENT}/molecule/managed/destroy.yml"
+
+verifier:
+  name: "ansible"
