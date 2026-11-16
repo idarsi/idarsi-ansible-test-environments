@@ -25,8 +25,9 @@ Before submitting repository changes, run `make validate` and `yamllint .`.
 The setup-script checks include an isolated RHEL install-source functional test
 for versioned ISO discovery, explicit overrides, and `setup-venv` activation;
 it uses temporary files and mocked environment-creation commands, without
-network access or libvirt. Role behavior is verified by each role's own
-Molecule scenarios.
+network access or libvirt. KVM base-image sealing ownership and permission
+checks are also VM-free and use mocked commands. Role behavior is verified by
+each role's own Molecule scenarios.
 
 The KVM diagnostic smoke tests include Rocky 10 and Fedora 44. A focused
 launcher mapping test mocks tmux and host checks; it verifies Rocky's default

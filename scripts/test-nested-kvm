@@ -39,9 +39,13 @@ fi
 uri=${KVM_LIBVIRT_URI:-qemu:///system}
 umask 077
 work=$(mktemp -d "${TMPDIR:-/tmp}/idarsi-nested-kvm.XXXXXXXX")
+credentials="$work/credentials"
+mkdir -m 700 "$credentials"
+chmod 711 "$work"
 hash=$(printf '%s' "$work" | sha256sum | cut -c1-8)
 outer="nested-kvm-${hash}"
-export MOLECULE_EPHEMERAL_DIRECTORY="$work/molecule"
+outer_disk="$work/${outer}.qcow2"
+export MOLECULE_EPHEMERAL_DIRECTORY="$credentials/molecule"
 mkdir -m 700 "$MOLECULE_EPHEMERAL_DIRECTORY"
 cleanup() {
   local status=$?
@@ -58,18 +62,9 @@ cleanup() {
       cat "$log" >&2
     done
   fi
-  if [[ -n ${address:-} ]]; then
-    ssh -F /dev/null -i "$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      "molecule@$address" "for name in 'inner-$hash' 'image-$hash'; do sudo virsh destroy \"\$name\" >/dev/null 2>&1 || true; sudo virsh undefine \"\$name\" --remove-all-storage >/dev/null 2>&1 || true; done" >/dev/null 2>&1 || true
-  fi
-  # The inner VM and its disk exist only inside this uniquely owned outer VM.
-  # Destroying the outer VM on the host is the ultimate cleanup, even if SSH fails.
-  if ! MOLECULE_EPHEMERAL_DIRECTORY="$MOLECULE_EPHEMERAL_DIRECTORY" KVM_LIBVIRT_URI="$uri" \
-    "$repo_root/scripts/kvm-vm" destroy "$outer"; then
-    printf 'FAIL: could not destroy outer guest %s; cleanup may be incomplete.\n' "$outer" >&2
+  if ! "$repo_root/scripts/cleanup-nested-kvm" "$outer" "$uri" "$outer_disk" "$work"; then
     status=1
   fi
-  rm -rf -- "$work"
   exit "$status"
 }
 address=
@@ -95,6 +90,18 @@ export KVM_LIBVIRT_URI="$uri" KVM_CPU_HOST_PASSTHROUGH=true
 export KVM_VCPUS=${KVM_NESTED_OUTER_VCPUS:-4} KVM_MEMORY_MB=${KVM_NESTED_OUTER_MEMORY_MB:-8192}
 export KVM_INSTALL_TIMEOUT=${KVM_NESTED_INSTALL_TIMEOUT:-3600}
 export KVM_BASE_IMAGE_MODE=off
+export KVM_DISK_PATH="$outer_disk"
+# The system libvirt QEMU process must traverse the disk's parent directory.
+# chmod 0711 above grants directory traversal without exposing names; credentials
+# remain isolated in their 0700 subdirectory. Do not use sudo to impersonate QEMU
+# here: sudo policy may require a password even when the directory is traversable.
+# This metadata check is limited to the explicit work directory: it does not
+# prove access through every ancestor, account for ACLs, or guarantee libvirt's
+# configured QEMU identity. Libvirt remains authoritative when it opens the disk.
+if [[ $(stat -c '%a' "$work") != 711 ]]; then
+  printf 'FAIL: explicit disk parent %s is not mode 0711; refusing to create the outer VM.\n' "$work" >&2
+  exit 1
+fi
 result=$("$repo_root/scripts/kvm-vm" create "$outer" "$iso" "$repo_root/examples/molecule-kvm/rocky9-10.ks.tmpl")
 address=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["address"])' "$result")
 key="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"

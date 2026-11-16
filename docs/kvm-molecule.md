@@ -152,7 +152,11 @@ so roles can exercise host security settings in a real VM.
 The destroy playbook removes each named libvirt guest and its managed disk. VM
 names are scoped by a hash of the Molecule ephemeral directory so different
 role scenarios do not collide. If a run is interrupted, `molecule destroy -s
-kvm` invokes the same cleanup path.
+kvm` invokes the same cleanup path. A private UUID ownership marker in that
+ephemeral directory guards stop, start, and destroy against same-name foreign
+domains. Existing VMs created before ownership markers were introduced are
+intentionally not auto-removed; remove those legacy domains and overlays
+manually after verifying their ownership.
 
 Use a role-specific Kickstart when the target needs a different package set,
 partition layout, subscription registration, or installation source. For
