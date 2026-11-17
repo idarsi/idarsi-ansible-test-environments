@@ -6,6 +6,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/scenario/scripts" "$tmp/ephemeral" "$tmp/bases"
 cp "$root/scripts/kvm-vm" "$tmp/scenario/scripts/kvm-vm"
+cp "$root/scripts/kvm-domain.sh" "$tmp/scenario/scripts/"
 cat >"$tmp/scenario/scripts/kvm-base-dir" <<EOF
 #!/usr/bin/env bash
 printf '%s\\n' '$tmp/bases'

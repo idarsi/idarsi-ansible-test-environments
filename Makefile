@@ -3,7 +3,7 @@ SHELL := /usr/bin/env bash
 ENVIRONMENT ?= ansible-current
 PROFILE ?= all
 
-.PHONY: help install uninstall setup-host setup-venv check-scripts check-dependencies validate update-dependencies
+.PHONY: help install uninstall setup-host setup-venv check-scripts check-python check-dependencies validate update-dependencies
 
 help:
 	@printf '%s\n' \
@@ -12,6 +12,7 @@ help:
 		'make setup-venv ENVIRONMENT=ansible-current' \
 		'make uninstall' \
 		'make check-scripts' \
+		'make check-python (isolated-run unit tests; no backends)' \
 		'make check-dependencies' \
 		'make validate'
 
@@ -34,7 +35,10 @@ check-scripts:
 check-dependencies:
 	scripts/check-dependencies
 
-validate: check-scripts check-dependencies
+check-python:
+	python3 -m unittest discover -s tests -p 'test_isolated*.py' -v
+
+validate: check-scripts check-dependencies check-python
 
 update-dependencies:
 	scripts/update-dependencies

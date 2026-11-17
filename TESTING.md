@@ -13,7 +13,7 @@ documented in [isolated test runs](docs/isolated-test-runs.md). Its cheap tests
 use temporary state and mocked backend commands:
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_isolated*.py' -v
+make check-python
 ```
 
 They cover concurrent allocator processes, discovery failures, inactive-network
@@ -21,9 +21,13 @@ and route conflicts, resource replacement, retained leases after cleanup
 failure, worker start journaling/session recovery, and managed/legacy guards.
 They do not demonstrate real Podman/KVM or all pinned Molecule compatibility.
 The repository-checks workflow runs these unit tests on pull requests and its
-weekly schedule, using Python 3.12 and no backend services.
+weekly schedule, using Python 3.12 and no backend services. CI runs the same
+`check-scripts`, `check-dependencies`, and `check-python` targets as
+`make validate`, but installs pinned Molecule before `make check-python` so
+effective-config cases run. The isolated-run suite runs only once per CI job.
 Actual effective-config smoke tests run when an existing Molecule installation
-is active (otherwise explicitly skipped). Local minimum/current checks cover
+is active (otherwise only those cases are explicitly skipped, not the stdlib
+suite). Local minimum/current checks cover
 inherited parallel and shared-state configuration. Filesystem fault-boundary
 tests use only private temporary directories, never the real KVM storage
 directory. They cover unnamed-inode publication, EEXIST, replacement refusal,
@@ -55,6 +59,14 @@ The tester owns concurrent same-scenario, interrupt and crash-recovery runtime
 acceptance. No roles have been migrated automatically.
 
 ## Existing environment checks
+
+`bash tests/test-shared-shell-helpers.sh` is a VM-free regression check for
+installer state paths and legacy KVM domain identities, included in
+`make check-scripts`. Fixed legacy hash prefixes cover long, literal-special,
+space-containing and non-normalized paths; account lookup mocks cover
+`SUDO_USER`, `USER`, `id -un`, home fallback and empty/explicit `XDG_STATE_HOME`.
+The checks also cover base/launcher naming agreement and 63-character
+truncation, without creating state directories or querying a backend.
 
 This repository prepares a reusable Rocky Linux 10 or Fedora 43/44 host for Molecule tests in
 Idarsi Ansible role repositories. The shared controller venv supports two
@@ -93,6 +105,11 @@ The shared environments also provide Ansible Lint for role checks. Run
 configuration and any justified exceptions remain role-owned.
 
 Before submitting repository changes, run `make validate` and `yamllint .`.
+`make validate` includes the shell/nested fixture checks, dependency-pin checks,
+and `make check-python` isolated-run unittest discovery. It starts no real
+Podman, KVM or nested-KVM backends and installs no dependencies. For local
+effective-config coverage, activate an existing pinned Molecule environment
+before running it.
 The setup-script checks include an isolated RHEL install-source functional test
 for versioned ISO discovery, explicit overrides, and `setup-venv` activation;
 it uses temporary files and mocked environment-creation commands, without
@@ -222,8 +239,9 @@ The generated blueprint statically configures the inner guest at
 gateway and nameserver `192.168.250.1`. This address is outside the DHCP pool
 `.100-.199`; the test asserts that the guest has the expected address over SSH.
 The harness transfers only `config/idarsi-test-network.xml`, `scripts/setup-host`,
-`scripts/kvm-base-dir`, and the role's `defaults`, `tasks`, `templates`, and
-`requirements.yml` (not repository inventory, SSH keys, Git metadata, or local
+its sourced `scripts/installer-state.sh`, `scripts/kvm-base-dir`, and the role's
+`defaults`, `tasks`, `templates`, and `requirements.yml` (not repository
+inventory, SSH keys, Git metadata, or local
 configuration). It installs host automation directly, without invoking the
 general-purpose `install.sh kvm` image-cache preparation. Run
 `bash tests/test-nested-kvm-cli.sh` for VM-free role-path CLI coverage.

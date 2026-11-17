@@ -2,6 +2,10 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+bash -n "$repo_root/scripts/installer-state.sh"
+bash -n "$repo_root/scripts/kvm-domain.sh"
+bash -n "$repo_root/tests/test-shared-shell-helpers.sh"
+bash "$repo_root/tests/test-shared-shell-helpers.sh"
 for script in install.sh uninstall.sh verify-install-kvm.sh verify-install-fedora44-kvm.sh tests/test-kvm-smoke-launcher.sh scripts/setup-host scripts/setup-venv scripts/prepare-kvm-install-source scripts/prepare-kvm-base-images scripts/kvm-base-image scripts/kvm-base-image-os-key scripts/kvm-base-dir scripts/kvm-vm scripts/kvm-smoke-tmux scripts/kvm-console-wait scripts/check-dependencies scripts/update-dependencies scripts/test-scripts scripts/test-rhel-install-source scripts/check-nested-kvm-capability scripts/check-nested-kvm-idempotence scripts/test-nested-kvm scripts/cleanup-nested-kvm scripts/virsh-network-mac tests/test-virsh-network-mac.sh tests/test-prepare-kvm-base-images.sh; do
   bash -n "$repo_root/$script"
 done

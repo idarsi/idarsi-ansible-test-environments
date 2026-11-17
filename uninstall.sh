@@ -2,12 +2,8 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-state_user=${SUDO_USER:-${USER:-$(id -un)}}
-state_user_home=$(getent passwd "$state_user" | cut -d: -f6)
-state_user_home=${state_user_home:-$HOME}
-state_home=${XDG_STATE_HOME:-$state_user_home/.local/state}
-repo_id=$(printf '%s' "$repo_root" | sha256sum | cut -c1-16)
-state_dir="$state_home/idarsi-ansible-test-environments/$repo_id"
+source "$repo_root/scripts/installer-state.sh"
+idarsi_installer_state "$repo_root"
 remove_host_packages=false
 
 if [[ $# -gt 1 || ( $# -eq 1 && $1 != --remove-host-packages ) ]]; then

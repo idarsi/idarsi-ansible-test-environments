@@ -32,9 +32,10 @@ netmask=${KVM_NETMASK:-255.255.255.0}
 nameserver=${KVM_NAMESERVER:-192.168.250.1}
 key_file="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"
 ownership_marker="$MOLECULE_EPHEMERAL_DIRECTORY/kvm-${instance}.uuid"
-hash=$(printf '%s' "$MOLECULE_EPHEMERAL_DIRECTORY" | sha256sum | cut -c1-8)
-domain="molecule-${instance}-${hash}"
-domain=${domain:0:63}
+source "$(dirname "${BASH_SOURCE[0]}")/kvm-domain.sh"
+idarsi_kvm_domain "$instance" "$MOLECULE_EPHEMERAL_DIRECTORY"
+hash=$kvm_domain_hash
+domain=$kvm_domain_name
 virsh_cmd=(virsh --connect "$uri")
 
 read_owned_uuid() {

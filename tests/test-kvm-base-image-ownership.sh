@@ -9,6 +9,7 @@ bin="$tmp/bin"
 base_dir="$tmp/bases"
 mkdir -p "$mock_repo/scripts" "$bin" "$base_dir"
 cp "$repo_root/scripts/kvm-base-image" "$mock_repo/scripts/"
+cp "$repo_root/scripts/kvm-domain.sh" "$mock_repo/scripts/"
 sed -i 's/deadline=$((SECONDS + 180))/deadline=$SECONDS/' "$mock_repo/scripts/kvm-base-image"
 cat >"$mock_repo/scripts/kvm-base-dir" <<'SH'
 #!/usr/bin/env bash

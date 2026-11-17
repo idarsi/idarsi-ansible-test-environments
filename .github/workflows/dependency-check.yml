@@ -8,10 +8,12 @@ on:
       - "scripts/**"
       - "tests/**"
       - "Makefile"
+      - "install.sh"
+      - "uninstall.sh"
+      - "config/**"
       - "verify-install*.sh"
       - "examples/molecule-kvm/**"
-      - "molecule/kvm-smoke-fedora44/**"
-      - "molecule/managed/**"
+      - "molecule/**"
       - "examples/molecule-managed-*/**"
       - ".github/workflows/**"
   schedule:
@@ -36,10 +38,10 @@ jobs:
       - name: Validate YAML style
         run: yamllint .
       - name: Validate scripts and dependency pins
-        run: make validate
+        run: make check-scripts check-dependencies
       - name: Install pinned Molecule for effective configuration checks
         run: |
           MOLECULE_PIN=$(grep '^molecule==' environments/ansible-current/requirements.txt)
           python -m pip install --disable-pip-version-check "$MOLECULE_PIN"
       - name: Check isolated-run ownership and recovery contracts without backends
-        run: python -m unittest discover -s tests -p 'test_isolated*.py' -v
+        run: make check-python
