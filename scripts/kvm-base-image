@@ -7,6 +7,7 @@ if [[ -n ${IDARSI_RUN_ID:-} && ${1:-} != find ]]; then
 fi
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source "$repo_root/scripts/kvm-domain.sh"
 base_dir=$("$(dirname "${BASH_SOURCE[0]}")/kvm-base-dir")
 cache_root=${XDG_CACHE_HOME:-$HOME/.cache}/idarsi-ansible-test-environments/kvm-base-locks
 revision=${KVM_BASE_IMAGE_REVISION:-1}
@@ -202,9 +203,9 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
       }
       trap cleanup EXIT
 
-      work_hash=$(printf '%s' "$work_dir" | sha256sum | cut -c1-8)
-      base_domain="molecule-base-${os_key}-${kickstart_hash:0:8}-${work_hash}"
-      base_domain=${base_domain:0:63}
+      idarsi_kvm_domain "base-${os_key}-${kickstart_hash:0:8}" "$work_dir"
+      work_hash=$kvm_domain_hash
+      base_domain=$kvm_domain_name
       base_disk="$base_dir/.${base_image##*/}.${work_hash}.building.qcow2"
       base_log_root=${KVM_LOG_DIR:-${TMPDIR:-/tmp}/idarsi-ansible-test-environments/kvm-logs}
       mkdir -p "$base_log_root"

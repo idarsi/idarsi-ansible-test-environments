@@ -111,7 +111,7 @@ key="$MOLECULE_EPHEMERAL_DIRECTORY/kvm_ed25519"
 # Transfer only the files needed to install and exercise this checkout. This
 # intentionally excludes inventory, SSH material, local configuration, and Git metadata.
 tar -C "$repo_root" -czf "$work/repo.tgz" \
-  config/idarsi-test-network.xml scripts/setup-host scripts/kvm-base-dir
+  config/idarsi-test-network.xml scripts/setup-host scripts/installer-state.sh scripts/kvm-base-dir
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   "molecule@$address" 'mkdir -p ~/nested-kvm-repo'
 ssh -F /dev/null -i "$key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \

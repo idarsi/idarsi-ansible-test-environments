@@ -60,6 +60,14 @@ acceptance. No roles have been migrated automatically.
 
 ## Existing environment checks
 
+`bash tests/test-shared-shell-helpers.sh` is a VM-free regression check for
+installer state paths and legacy KVM domain identities, included in
+`make check-scripts`. Fixed legacy hash prefixes cover long, literal-special,
+space-containing and non-normalized paths; account lookup mocks cover
+`SUDO_USER`, `USER`, `id -un`, home fallback and empty/explicit `XDG_STATE_HOME`.
+The checks also cover base/launcher naming agreement and 63-character
+truncation, without creating state directories or querying a backend.
+
 This repository prepares a reusable Rocky Linux 10 or Fedora 43/44 host for Molecule tests in
 Idarsi Ansible role repositories. The shared controller venv supports two
 target backends: Podman for fast tests and KVM + Kickstart for full virtual
@@ -231,8 +239,9 @@ The generated blueprint statically configures the inner guest at
 gateway and nameserver `192.168.250.1`. This address is outside the DHCP pool
 `.100-.199`; the test asserts that the guest has the expected address over SSH.
 The harness transfers only `config/idarsi-test-network.xml`, `scripts/setup-host`,
-`scripts/kvm-base-dir`, and the role's `defaults`, `tasks`, `templates`, and
-`requirements.yml` (not repository inventory, SSH keys, Git metadata, or local
+its sourced `scripts/installer-state.sh`, `scripts/kvm-base-dir`, and the role's
+`defaults`, `tasks`, `templates`, and `requirements.yml` (not repository
+inventory, SSH keys, Git metadata, or local
 configuration). It installs host automation directly, without invoking the
 general-purpose `install.sh kvm` image-cache preparation. Run
 `bash tests/test-nested-kvm-cli.sh` for VM-free role-path CLI coverage.
