@@ -9,20 +9,22 @@ import shutil
 import signal
 import sys
 import tempfile
+import uuid
 
 from .backends import Backend, REPO, validate_platforms
+from . import admission
 from .discovery import command, discover, podman_context
 from .processes import spawn, stop_workers
 from .state import RunError, Store, atomic_json, lock
 
 
-def parse_configuration(role: Path, scenario: str, environment: dict) -> dict:
+def parse_configuration(role: Path, scenario: str, environment: dict, direct: bool = False) -> dict:
     """Validate the actual installed Molecule's merged, interpolated config."""
     source = role / "molecule" / scenario / "molecule.yml"
     with tempfile.TemporaryDirectory(prefix="idarsi-config-") as temporary:
-        effective_environment = dict(
-            environment, MOLECULE_EPHEMERAL_DIRECTORY=str(Path(temporary) / "ephemeral"),
-        )
+        effective_environment = dict(environment)
+        if not direct:
+            effective_environment["MOLECULE_EPHEMERAL_DIRECTORY"] = str(Path(temporary) / "ephemeral")
         data = json.loads(command(
             ["python3", str(REPO / "scripts/isolated_runs/molecule_config.py"), str(source)],
             env=effective_environment, cwd=str(role),
@@ -55,16 +57,64 @@ def cleanup_locked(store: Store, run_id: str) -> None:
     data = store.load(run_id)
     if data["status"] == "cleaned":
         return
+    if "mutation_protocol" in data and data["mutation_protocol"] != "sealed-v1":
+        raise RunError("Unsupported mutation protocol; retaining resources and lease")
+    if data.get("mode") == "direct":
+        from .context import require_completed
+
+        stop_workers(data)
+        with lock(store.directory(run_id) / ".resources.lock", blocking=False):
+            require_completed(store.load(run_id))
+        raise RunError(
+            "Direct generation: use scenario-context inspect/destroy for its bound context; "
+            "incomplete mutations permit inspection only"
+        )
     # Do not write even a status here: a lifecycle worker may still be
     # committing ownership intent. Failure to stop it leaves the journal alone.
+    if "admission_protocol" in data:
+        data = admission.close(store, run_id)
     stop_workers(data)
+    if data.get("mutation_protocol") == "sealed-v1":
+        cleanup_sealed_locked(store, run_id)
+        return
     with lock(store.directory(run_id) / ".resources.lock", blocking=False):
         cleanup_resources_locked(store, run_id)
+
+
+def cleanup_sealed_locked(store: Store, run_id: str) -> None:
+    """Supervisor-owned new protocol: no cleanup after an uncertain mutation."""
+    from .context import require_completed
+
+    with lock(store.directory(run_id) / ".resources.lock", blocking=False):
+        data = store.load(run_id)
+        require_completed(data)
+        operation = {"id": str(uuid.uuid4()), "action": "destroy", "purpose": "supervisor-cleanup"}
+        data["operations"].append(operation)
+        data["status"] = "cleaning"
+        child = spawn(
+            store, data,
+            [sys.executable, str(REPO / "scripts/scenario-context"), "_worker",
+             run_id, operation["id"], "destroy"],
+            dict(os.environ), str(REPO), operation=operation,
+        )
+    # The cleanup worker must acquire resources itself; never wait holding them.
+    code = child.wait()
+    stop_workers(store.load(run_id))
+    with lock(store.directory(run_id) / ".resources.lock", blocking=False):
+        data = store.load(run_id)
+        require_completed(data)
+        if code or data["status"] != "destroyed":
+            raise RunError("Cleanup worker failed; retaining resources and lease")
+        with lock(store.root / ".allocator.lock"):
+            data["status"] = "cleaned"
+            store.save(data)
 
 
 def cleanup_resources_locked(store: Store, run_id: str) -> None:
     """Workers are stopped and the resource lock is held for every journal write."""
     data = store.load(run_id)
+    if data.get("mode") == "direct" or "mutation_protocol" in data:
+        raise RunError("Sealed cleanup requires its journalled scenario-context mutation worker")
     data["status"] = "cleaning"
     store.save(data)
     try:
@@ -83,6 +133,14 @@ def cleanup_resources_locked(store: Store, run_id: str) -> None:
 
 
 def cleanup(store: Store, run_id: str) -> None:
+    data = store.load(run_id)
+    if data["status"] == "cleaned":
+        return
+    if data.get("mode") == "direct" and data.get("context_publication") == "pending":
+        from .context import recover_unpublished
+
+        recover_unpublished(store, run_id)
+        return
     with lock(store.directory(run_id) / ".supervisor.lock", blocking=False):
         cleanup_locked(store, run_id)
 
@@ -91,10 +149,45 @@ def lifecycle(store: Store, action: str, run_id: str) -> None:
     """Internal synchronous Molecule adapter, never a standalone retained run."""
     if os.environ.get("IDARSI_RUN_ID") != run_id:
         raise RunError("Lifecycle actions require the supervisor environment")
+    from .context import require_completed, resolved
+
+    binding = store.load(run_id)
+    resolved(argparse.Namespace(
+        role=binding["role"], scenario=binding["scenario"], backend=binding["backend"],
+    ), store)
     with lock(store.directory(run_id) / ".resources.lock"):
         data = store.load(run_id)
         if data["status"] != "running":
             raise RunError("Run is not in supervised running state")
+        if "mutation_protocol" in data and data["mutation_protocol"] != "sealed-v1":
+            raise RunError("Unsupported mutation protocol")
+        if "admission_protocol" in data:
+            expected = {
+                key: binding[key] for key in ("id", "role", "scenario", "backend")
+            }
+            expected["ephemeral"] = str(store.ephemeral(run_id).resolve())
+            with admission.mutation_boundary(store, run_id, expected) as (data, worker):
+                if action == "destroy":
+                    from .context import mapping
+
+                    mapping({"ephemeral_directory": expected["ephemeral"]}, [])
+                    return
+                require_completed(data, quiescent=False)
+                operation_id = str(uuid.uuid4())
+                data["operations"].append({
+                    "id": operation_id, "action": "create", "worker": worker,
+                })
+                store.save(data)
+            instances = Backend(store, data).create(data["config"]["platforms"])
+            from .context import mapping
+
+            mapping({"ephemeral_directory": expected["ephemeral"]}, instances)
+            data = store.load(run_id)
+            if data["operations"][-1]["id"] != operation_id:
+                raise RunError("Create mutation journal changed before completion")
+            data["operations"][-1]["completion"] = operation_id
+            store.save(data)
+            return
         backend = Backend(store, data)
         if action == "destroy":
             # A timed-out tool can leave same-session libguestfs/QEMU children.
@@ -104,6 +197,17 @@ def lifecycle(store: Store, action: str, run_id: str) -> None:
             # This adapter supports one full test, never retained create/destroy.
             instances = []
         else:
+            operation_id = None
+            if data.get("mutation_protocol") == "sealed-v1":
+                require_completed(data, quiescent=False)
+                operation_id = str(uuid.uuid4())
+                worker = next(
+                    worker for worker in data["workers"] if worker["pid"] == os.getsid(0)
+                )
+                data["operations"].append({
+                    "id": operation_id, "action": "create", "worker": worker,
+                })
+                store.save(data)
             platforms = data["config"]["platforms"]
             instances = backend.create(platforms)
         destination = Path(os.environ["MOLECULE_INSTANCE_CONFIG"])
@@ -112,6 +216,12 @@ def lifecycle(store: Store, action: str, run_id: str) -> None:
             raise RunError("Instance configuration is outside the run ephemeral directory")
         # JSON is valid YAML and accepted by all supported Molecule versions.
         atomic_json(destination, instances)
+        if action == "create" and operation_id is not None:
+            data = store.load(run_id)
+            if data["operations"][-1]["id"] != operation_id:
+                raise RunError("Create mutation journal changed before completion")
+            data["operations"][-1]["completion"] = operation_id
+            store.save(data)
 
 
 def run(args, store: Store) -> int:
@@ -131,6 +241,8 @@ def run(args, store: Store) -> int:
     context = {"podman": podman_context(), "libvirt": "qemu:///system"}
     data = store.allocate(args.backend, context, discover, role, args.scenario)
     run_id = data["id"]
+    # Public control identity: first stdout line, flushed before ANY worker.
+    # Consumers latch it once; later worker output must never replace it.
     print("Run ID: " + run_id, flush=True)
     directory = store.directory(run_id)
     with lock(directory / ".supervisor.lock", blocking=False):
@@ -141,9 +253,16 @@ def run(args, store: Store) -> int:
             raise RunError("Run was recovered before supervision started; start a new run")
         data["config"] = config
         data["status"] = "running"
+        data["mode"] = "supervised"
+        data["mutation_protocol"] = "sealed-v1"
+        data["operations"] = []
+        data["admission_protocol"] = admission.PROTOCOL
+        admission.initialize(store, run_id)
         store.save(data)
         environment.update(
             IDARSI_RUN_ID=run_id, MOLECULE_EPHEMERAL_DIRECTORY=str(store.ephemeral(run_id)),
+            IDARSI_HANDOFF="v1",
+            IDARSI_MOLECULE_BACKEND=args.backend,
         )
         # Do not let an inherited role/scenario identity contaminate this invocation.
         for key in ("MOLECULE_FILE", "MOLECULE_INSTANCE_CONFIG", "MOLECULE_SCENARIO_DIRECTORY"):
@@ -167,8 +286,6 @@ def run(args, store: Store) -> int:
             while child.poll() is None and not cancelled:
                 time.sleep(0.1)
             if cancelled:
-                stop_workers(store.load(run_id))
-                child.wait(timeout=5)
                 result = 128 + cancelled[0]
             else:
                 result = child.returncode
@@ -190,6 +307,8 @@ def run(args, store: Store) -> int:
 
 def managed_environment() -> dict:
     """Remove inherited CLI defaults, including min's truthy 'false' parallel flag."""
+    if any(key == "IDARSI_RUN_ID" or key.startswith("IDARSI_HANDOFF") for key in os.environ):
+        raise RunError("Cannot start a supervisor from an inherited supervised handoff")
     environment = {key: value for key, value in os.environ.items() if not key.startswith("MOLECULE_")}
     environment.update(IDARSI_TEST_ENVIRONMENT=str(REPO), LC_ALL="C.UTF-8")
     return environment
@@ -233,10 +352,12 @@ def main(argv=None) -> int:
                 if data["status"] == "cleaned":
                     continue
                 try:
-                    with lock(store.directory(data["id"]) / ".supervisor.lock", blocking=False):
-                        print(data["id"], "recovery requested" if args.apply else "unlocked; explicit recovery candidate")
-                        if args.apply:
-                            cleanup_locked(store, data["id"])
+                    if args.apply:
+                        cleanup(store, data["id"])
+                        print(data["id"], "recovery requested")
+                    else:
+                        with lock(store.directory(data["id"]) / ".supervisor.lock", blocking=False):
+                            print(data["id"], "unlocked; explicit recovery candidate")
                 except RunError as exc:
                     print(data["id"], str(exc), file=sys.stderr)
                     failed = True

@@ -3,8 +3,11 @@
 Experimental concurrent-run isolation is available through
 [`scripts/test-run`](docs/isolated-test-runs.md). It uses per-run networks,
 subnets and identity-checked cleanup. It is opt-in; legacy commands are
-unchanged. See the documented initial scope and pending runtime acceptance
-before migrating scenarios.
+unchanged. Direct Podman/KVM and bounded supervised isolation/cancellation
+acceptance have passed on the current controller with Rocky Linux 10 guests.
+See the [recorded scope and remaining matrix](docs/isolated-test-runs.md#verification)
+before migrating scenarios; this is not acceptance of every supported OS or
+controller line.
 
 This repository prepares a Rocky Linux 10 or Fedora 43/44 host for running Molecule tests in
 Idarsi Ansible role repositories. Molecule scenarios stay in each role and
@@ -129,3 +132,13 @@ make validate
 Role-specific collections belong in the role's own Galaxy requirements file;
 they are not installed globally by this repository. Repository checks run with
 `make validate` and `yamllint .`.
+
+## Managed scenario lifecycle
+
+Managed examples support both direct `molecule test/create/converge/verify/destroy`
+and isolated cooperative parallel full tests through `scripts/test-run run`.
+Direct use requires neither a wrapper nor TUI. Use a checkout providing
+`scripts/scenario-context` schema `idarsi.scenario-context/v1`, independently of
+the controller venv layout. See [the lifecycle contract](docs/isolated-test-runs.md)
+for setup, dependency bootstrap, preflight JSON and incomplete-operation recovery
+limitations. Legacy scenarios retain their existing behavior.

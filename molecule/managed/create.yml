@@ -5,15 +5,19 @@
   gather_facts: false
   become: false
   tasks:
-    - name: "Require the managed run supervisor"
+    - name: "Require the versioned shared lifecycle helper"
       ansible.builtin.assert:
         that:
-          - lookup('env', 'IDARSI_RUN_ID') | length > 0
+          - lookup('env', 'IDARSI_TEST_ENVIRONMENT') | length > 0
     - name: "Create resources and write logical instance mapping synchronously"
       ansible.builtin.command:
         argv:
-          - "{{ lookup('env', 'IDARSI_TEST_ENVIRONMENT') }}/scripts/test-run"
-          - "_lifecycle"
+          - "{{ lookup('env', 'IDARSI_TEST_ENVIRONMENT') }}/scripts/scenario-context"
           - "create"
-          - "{{ lookup('env', 'IDARSI_RUN_ID') }}"
+          - "--backend"
+          - "{{ lookup('env', 'IDARSI_MOLECULE_BACKEND') }}"
+          - "--scenario"
+          - "{{ lookup('env', 'MOLECULE_SCENARIO_NAME') }}"
+          - "--role"
+          - "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
       changed_when: true

@@ -1,19 +1,23 @@
 ---
-- name: "Defer identity-owned resource removal to the isolated-run supervisor"
+- name: "Destroy the bound direct generation or defer to its supervisor"
   hosts: "localhost"
   connection: "local"
   gather_facts: false
   become: false
   tasks:
-    - name: "Require the managed run supervisor"
+    - name: "Require the versioned shared lifecycle helper"
       ansible.builtin.assert:
         that:
-          - lookup('env', 'IDARSI_RUN_ID') | length > 0
-    - name: "Clear instance mapping without deleting resources inside the worker session"
+          - lookup('env', 'IDARSI_TEST_ENVIRONMENT') | length > 0
+    - name: "Remove owned direct resources or clear supervised mapping"
       ansible.builtin.command:
         argv:
-          - "{{ lookup('env', 'IDARSI_TEST_ENVIRONMENT') }}/scripts/test-run"
-          - "_lifecycle"
+          - "{{ lookup('env', 'IDARSI_TEST_ENVIRONMENT') }}/scripts/scenario-context"
           - "destroy"
-          - "{{ lookup('env', 'IDARSI_RUN_ID') }}"
+          - "--backend"
+          - "{{ lookup('env', 'IDARSI_MOLECULE_BACKEND') }}"
+          - "--scenario"
+          - "{{ lookup('env', 'MOLECULE_SCENARIO_NAME') }}"
+          - "--role"
+          - "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
       changed_when: true

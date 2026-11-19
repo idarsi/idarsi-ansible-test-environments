@@ -20,7 +20,7 @@ def process(pid: int):
         path = Path("/proc") / str(pid)
         fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
         return {
-            "pid": pid, "session": int(fields[3]), "start": fields[19],
+            "pid": pid, "parent": int(fields[1]), "session": int(fields[3]), "start": fields[19],
             "uid": path.stat().st_uid, "zombie": fields[0] == "Z",
         }
     except (FileNotFoundError, ProcessLookupError):
@@ -75,7 +75,7 @@ def stop_workers(data: dict) -> None:
             raise RunError("Worker session did not stop; retaining all resources")
 
 
-def spawn(store, data: dict, argv: list, env: dict, cwd: str):
+def spawn(store, data: dict, argv: list, env: dict, cwd: str, operation=None):
     """Journal a new session before allowing it to execute any lifecycle work."""
     read_fd, write_fd = os.pipe()
     helper = (
@@ -91,9 +91,12 @@ def spawn(store, data: dict, argv: list, env: dict, cwd: str):
         identity = process(child.pid)
         if not identity:
             raise RunError("Worker exited before start could be journalled")
-        data["workers"].append({
+        worker = {
             "pid": child.pid, "start": identity["start"], "boot": boot_id(),
-        })
+        }
+        data["workers"].append(worker)
+        if operation is not None:
+            operation["worker"] = worker
         store.save(data)
         os.write(write_fd, b"G")
         return child

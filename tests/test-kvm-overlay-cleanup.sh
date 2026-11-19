@@ -38,7 +38,7 @@ cat >"$tmp/bin/virt-customize" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-for tool in virt-install; do printf '#!/usr/bin/env bash\nexit 90\n' >"$tmp/bin/$tool"; done
+for tool in virt-install virt-sysprep; do printf '#!/usr/bin/env bash\nexit 90\n' >"$tmp/bin/$tool"; done
 chmod +x "$tmp/bin"/*
 cat >"$tmp/bin/ln" <<'SH'
 #!/usr/bin/env bash

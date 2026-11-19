@@ -1,5 +1,60 @@
 # Testing
 
+## Recorded bounded acceptance
+
+On 2026-11-19, runtime acceptance passed with Python 3.12.16, Ansible Core
+2.20.8 and Molecule 26.8.0 on the current controller, using Rocky Linux 10
+guests: direct Podman/KVM full implemented lifecycles, retained direct Podman
+commands and a new generation after destroy, supervised KVM smoke, and two
+concurrent same-scenario supervised Podman runs. Cancellation after sealed
+host create cleaned the selected run while its peer completed successfully.
+A direct three-node Ceph run also passed idempotence and role verification,
+preserving its context-private ansible.posix 2.1.0 through final cleanup.
+This is not supervised Ceph cluster acceptance.
+
+The tester also recorded 159 passing Python tests and a passing earlier
+shell-check run; the affected overlay-cleanup fixture passed separately after
+its mock repair. Dependency-pin
+validation is a separate gate; these results do not imply it passed.
+See the [technical acceptance table](docs/isolated-test-runs.md#verification)
+for the exact scope and remaining matrix. Actual host-daemon mutation
+interruption/late completion, crash/reboot recovery and all OS/controller lanes
+are not established by this record; incomplete-operation safeguards have
+mocked-suite evidence only.
+
+## Dual-mode helper checks
+
+`python3 -m unittest discover -s tests -p 'test_isolated_context.py' -v`
+checks incomplete-operation refusal even with empty sessions, sealed-session
+quiescence requirements, generic cleanup refusal for direct generations,
+non-revival of cleaned generations and fail-closed partial handoffs. All backend
+calls are absent or mocked. These checks do not establish runtime acceptance.
+The same managed scenario is tested directly (including initial destroy,
+dependency bootstrap, retained create/converge/verify and destroy) and through
+the supervised launcher. Runtime interruption, late daemon completion, persistent
+child session and interrupted cleanup acceptance remains tester-owned.
+See [the technical contract](docs/isolated-test-runs.md).
+
+The focused context regressions use the real installed `Config.env` exports
+(including cached `MOLECULE_FILE`) for direct resolution/mapping and supervised
+mapping-only destroy. Default and custom `MOLECULE_ENV_FILE` fixtures exercise
+actual effective config without creating backend resources. Additional fixtures
+reject stale initialized configuration and constrain unpublished-allocation
+lease recovery.
+`python3 -m unittest discover -s tests -p 'test_isolated_supervised_seals.py' -v`
+checks incomplete create/cleanup refusal (including negative queries and late
+objects), sealed-create cleanup after guest failure, cleanup seals before lease
+release and unchanged legacy recovery. Backend commands are mocked throughout.
+
+`python3 -m unittest discover -s tests -p 'test_isolated_admission.py' -v`
+checks close-before-register and register-before-close races, the mutation-boundary
+recheck, missing/invalid gates, unrelated/stale/reparented/inconsistent ancestry,
+all-session registration and the closed-gate cleanup exception. A cheap fixture
+uses actual `Config.env` plus two tiny Python child sessions and a mocked backend
+to assert that every session and create intent is journalled before mutation.
+Cancellation fixtures require the admission gate to be closed before stopping
+workers. These are not backend acceptance or generic containment tests.
+
 `test_isolated_private.py` checks private non-export publication states, actual
 object recovery reconciliation, strict legacy fallback, Netbox-shaped omitted
 metadata without foreign header reads, explicit references and query failures,
@@ -55,8 +110,10 @@ divergent live/persistent definitions. It asserts no `net-destroy` on a
 dependency, configuration mismatch or uncertain query, and retains successful
 cleanup for proven-unrelated interfaces. Every backend and kernel-network query
 in these tests is mocked.
-The tester owns concurrent same-scenario, interrupt and crash-recovery runtime
-acceptance. No roles have been migrated automatically.
+The tester owns the remaining runtime matrix and crash-recovery acceptance.
+The bounded same-scenario concurrency and post-create cancellation results above
+do not establish interruption safety during a host-daemon mutation. No roles
+have been migrated automatically.
 
 ## Existing environment checks
 

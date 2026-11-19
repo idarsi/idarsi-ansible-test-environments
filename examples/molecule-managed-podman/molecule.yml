@@ -1,6 +1,8 @@
 ---
 driver:
   name: "default"
+  safe_files:
+    - "${MOLECULE_EPHEMERAL_DIRECTORY}/collections/*"
   options:
     managed: true
 
@@ -12,6 +14,8 @@ platforms:
 
 provisioner:
   name: "ansible"
+  env:
+    IDARSI_MOLECULE_BACKEND: "podman"
   playbooks:
     create: "${IDARSI_TEST_ENVIRONMENT}/molecule/managed/create.yml"
     destroy: "${IDARSI_TEST_ENVIRONMENT}/molecule/managed/destroy.yml"
