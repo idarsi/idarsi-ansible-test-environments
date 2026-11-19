@@ -85,6 +85,8 @@ class StoreTests(StoreFixture):
     def test_nonprivate_state_refused(self):
         root = Path(self.temporary.name) / "shared"
         root.mkdir(mode=0o755)
+        root.chmod(0o755)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o755)
         with self.assertRaises(RunError):
             Store(root)
 
@@ -350,10 +352,32 @@ class SupervisorTests(StoreFixture):
         child.poll = lambda: None if interrupt else code
         child.wait = lambda **kwargs: code
 
-        def fake_spawn(*args):
+        def fake_spawn(*args, **kwargs):
+            if "operation" in kwargs:
+                store, data = args[:2]
+                operation = kwargs["operation"]
+                identity = {"pid": 123, "boot": "fixture", "start": "1"}
+                data["workers"].append(identity)
+                operation["worker"] = identity
+                store.save(data)
+
+                def complete_cleanup():
+                    from isolated_runs import context
+
+                    with patch.object(context, "members", return_value=[{"session": os.getsid(0)}]):
+                        try:
+                            context.worker(store, data["id"], operation["id"], "destroy")
+                        except RunError:
+                            return 1
+                    return 0
+
+                return SimpleNamespace(wait=complete_cleanup)
             if interrupt:
                 os.kill(os.getpid(), signal.SIGTERM)
             return child
+
+        def closed_before_stop(data):
+            self.assertEqual(cli.admission.gate(self.store, data["id"])["state"], "closed")
 
         args = SimpleNamespace(role=self.temporary.name, scenario="validation", backend="podman")
         config = {"platforms": [{"name": "node", "image": "test", "pre_build_image": True}]}
@@ -362,7 +386,8 @@ class SupervisorTests(StoreFixture):
                 patch.object(cli, "podman_context", return_value={}), \
                 patch.object(cli, "discover", return_value=[]), \
                 patch.object(cli, "spawn", side_effect=fake_spawn), \
-                patch.object(cli, "stop_workers"), \
+                patch.object(cli, "stop_workers", side_effect=closed_before_stop), \
+                patch("isolated_runs.context.members", return_value=[]), \
                 patch.object(Backend, "destroy_guests", side_effect=RunError("cleanup failed") if cleanup_error else None), \
                 patch.object(Backend, "destroy_network"), \
                 contextlib.redirect_stdout(io.StringIO()), \
@@ -374,7 +399,9 @@ class SupervisorTests(StoreFixture):
 
     def test_cleanup_error_changes_success_to_failure(self):
         self.assertNotEqual(self.invoke(cleanup_error=True), 0)
-        self.assertEqual(self.store.runs()[0]["status"], "cleanup_failed")
+        data = self.store.runs()[0]
+        self.assertEqual(data["status"], "cleaning")
+        self.assertNotIn("completion", data["operations"][-1])
 
     def test_cleanup_error_does_not_hide_original_failure(self):
         self.assertEqual(self.invoke(code=7, cleanup_error=True), 7)

@@ -28,3 +28,14 @@ Ansible connection, converge, verify, and cleanup:
 source .venv/ansible-current/bin/activate
 molecule test -s podman-smoke
 ```
+## Managed dual-mode scenarios
+
+For managed Podman use `examples/molecule-managed-podman` and the
+[versioned lifecycle contract](isolated-test-runs.md). The same default-driver
+scenario runs directly with Molecule (no TUI/wrapper) or under `scripts/test-run
+run --backend podman --scenario podman-validation` for isolated cooperative
+parallel full tests. Keep its backend environment mapping. Helper v1 is required
+independently of venv location; dependency bootstrap resolves the real ephemeral
+collections directory before create. Direct retained guests are not safe for
+same-context concurrent use. Incomplete mutations retain resources and leases
+with inspection-only recovery. The legacy plugin guidance below is unchanged.

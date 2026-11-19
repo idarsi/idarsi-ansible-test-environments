@@ -270,3 +270,14 @@ differs. Do not combine either image selector with a nonempty `install_source`.
 An empty `image_path` without cache metadata fails clearly. Existing ISO-only
 platforms remain unchanged. Molecule (including direct TUI invocation) performs
 this resolution itself; no TUI-side cache preparation is needed.
+## Managed dual-mode scenarios
+
+For managed KVM use `examples/molecule-managed-kvm` and the
+[versioned lifecycle contract](isolated-test-runs.md). The same default-driver
+scenario runs directly with Molecule (no TUI/wrapper) or under `scripts/test-run
+run --backend kvm --scenario kvm-validation` for isolated cooperative parallel
+full tests. Keep its backend environment mapping. Helper v1 is required
+independently of venv location; dependency bootstrap resolves the real ephemeral
+collections directory before create. Direct retained guests are not safe for
+same-context concurrent use. Incomplete mutations retain resources and leases
+with inspection-only recovery. The legacy launcher guidance below is unchanged.

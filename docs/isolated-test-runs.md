@@ -1,10 +1,215 @@
-# Isolated, supervised test runs (experimental)
+# Shared direct and supervised test runs (experimental)
+
+## Dual-mode lifecycle and helper v1
+
+The **same managed scenario** supports ordinary `molecule test`, `create`,
+`converge`, `verify`, and `destroy`, without a wrapper or TUI. Activate a
+compatible controller and set `IDARSI_TEST_ENVIRONMENT` to a checkout supplying
+the versioned helper below. This requirement is independent of the controller
+venv's installation path. Copy the managed example's `provisioner.env` backend
+setting, `driver.safe_files` collection-preservation glob, and default-driver
+create/destroy playbooks. The helper validates the effective safe-files entry
+`${MOLECULE_EPHEMERAL_DIRECTORY}/collections/*`; otherwise Molecule's own
+post-destroy pruning could delete installed collections.
+`IDARSI_TEST_ENVIRONMENT` alone never indicates supervision.
+
+Direct commands retain guests between invocations. Their context identity is
+the canonical role checkout, scenario, backend and **actual effective Molecule
+ephemeral directory**. Do not concurrently use guests from the same direct
+context. For isolated cooperating parallel runs, use `scripts/test-run run`
+instead; it gives each full test a distinct ephemeral directory and generation.
+Legacy scenarios are not automatically converted.
+
+### Stable machine interface
+
+```bash
+scripts/scenario-context capabilities --backend podman --scenario podman-validation --role /path/to/role
+scripts/scenario-context resolve --backend podman --scenario podman-validation --role /path/to/role
+```
+
+Actions are `capabilities`, `resolve`, `init`, `inspect`, `create`, and `destroy`.
+`--backend` and `--scenario` are required; `--role` defaults to the current
+directory. Success writes one JSON object to stdout; errors exit 1, write a
+diagnostic to stderr, and emit no success object. Internal `_worker` is not
+public API.
+
+There is no “legacy unsupported” success classification or fallback exit code:
+nonzero capability results are errors, never permission to downgrade to a
+legacy/direct execution path.
+
+Required success fields:
+
+```json
+{
+  "schema": "idarsi.scenario-context/v1",
+  "mode": "direct",
+  "lifecycle_modes": ["direct", "supervised"],
+  "effective_config_validated": true,
+  "role": "/canonical/role",
+  "scenario": "podman-validation",
+  "backend": "podman",
+  "ephemeral_directory": "/actual/molecule/ephemeral",
+  "collections_directory": "/actual/molecule/ephemeral/collections",
+  "generation": null
+}
+```
+
+Consumers must check schema and required fields and tolerate additive fields.
+`mode` is `direct` or `supervised`; `generation` is null before allocation or
+after cleanup, otherwise a canonical UUID. `inspect` additionally includes
+`manifest` for an existing generation in either mode; `manifest.subnet` is
+the allocated subnet and `manifest.direct_identity` is the direct identity.
+`capabilities` and `resolve`
+validate effective installed Molecule configuration without allocating resources;
+they work **before dependency installation, create, and initial destroy**.
+Direct resolution honors the invocation's exported `MOLECULE_ENV_FILE`, including
+a nondefault `--env-file` selection. `MOLECULE_FILE` is checked against the actual
+installed Config.env export (the effective cached file), not the source scenario
+filename. Role/scenario checks still use the effective canonical source identity.
+Dependency bootstrap must use `collections_directory` from `resolve`, not a
+guessed cache location. Existing destinations must be real directories owned
+by the controller UID and not writable by other users; symlink destinations
+are rejected. Create the destination if absent before Galaxy installation.
+The dependency phase remains role-owned, including its collection installation
+lock; the helper does not install collections or lock an installer. Use
+`resolve`, not `init`, when dependency installation needs no generation.
+Initial destroy changes only the instance mapping, never collections.
+No arbitrary shell metadata is read.
+`init` allocates a lease without mutating a backend (read-only backend discovery
+is required). It is not needed for dependency bootstrap. Shared playbooks call
+`create`/`destroy` with Molecule's role, scenario, instance and ephemeral binding.
+
+Presence of any `IDARSI_RUN_ID` or `IDARSI_HANDOFF*` variable selects strict
+supervised validation, even if empty. Partial/invalid handoffs fail closed.
+The launcher supplies `IDARSI_HANDOFF=v1`; role, scenario, backend, ephemeral,
+running manifest and journalled worker session must all match. Supervised
+destroy is mapping-only: only the outer supervisor removes its resources.
+
+### Mutation safety and recovery limits
+
+Context pointers and authoritative manifests live under the private Store root,
+outside disposable Molecule ephemeral state. A journal is allocated before its
+pointer is published. Each new resource generation has a distinct UUID; cleaned
+generations are never revived. Lost ephemeral files do not lose ownership.
+Configuration is bound at allocation: every create, including the first after
+`init`, rejects a changed effective configuration before any backend mutation.
+Destroy the generation and allocate a new one rather than silently reinterpreting
+an initialized generation.
+
+A short-lived direct controller holds context then generation supervisor locks.
+It stops old journalled mutation sessions **before** acquiring the resource lock.
+Each host mutation runs in a separate gated session: operation ID/action and
+worker boot/PID/start identity are durable before the gate opens. The worker
+owns the resource lock during backend changes. Completion is sealed only after
+all backend commands and journal/mapping writes succeed, never in `finally`.
+After worker completion the controller reloads the manifest. Resource/graph locks
+are released in order; the graph lock never overlaps the allocator lock. The
+allocator lock is acquired last to release a conclusively cleaned lease.
+The user's shell and Molecule session are never signalled.
+
+**Any failed/interrupted mutation is incomplete.** Before any subsequent
+destruction, sessions are quiesced and every operation must have a valid seal.
+An incomplete operation means **zero deletions and no lease release**, even
+after reboot or when backend queries show no object: submitted daemon requests
+may finish late. Interrupted destroy also retains its lease. Recovery for such
+direct generations is presently **inspection-only**; neither generic cleanup,
+reap, nor a force-clear is a cancellation barrier. Preserve the journal and
+escalate for backend-specific cancellation/reconciliation implementation.
+Completed sealed operations with empty sessions permit ordinary identity-checked
+direct destroy. No detached/controller async/host sudo mutation workers are
+supported. This is conservative collision safety, not an untrusted-code sandbox.
+New supervised manifests explicitly declare `mutation_protocol: sealed-v1`.
+Their host create operation records intent and its admitted, journalled session
+identity before issuing backend commands, and seals only after successful
+backend and journal/mapping writes. Molecule process exit is **not** a seal.
+A subsequent guest converge/verify failure does not invalidate a sealed host
+create. Outer cleanup stops sessions before resources and requires all prior
+mutation seals; it then journals a separate gated cleanup worker and seals that
+cleanup before releasing the lease. An incomplete create or cleanup retains
+resources and lease even if all backend queries are negative or an object
+appears late. Neither reboot nor client termination proves daemon cancellation.
+Existing supervised version-1 manifests retain their original recovery path:
+absence of `mutation_protocol` selects that legacy path; no operation seals or
+provenance are backfilled or required for old supervised journals. An explicit
+unsupported protocol version fails closed rather than selecting legacy recovery.
+
+### Supervised tool sessions and closeable admission
+
+New supervised runs additionally declare `admission_protocol: session-v1`.
+Before launching their outer worker, the supervisor creates a private durable
+`admission.json` with version, run ID and state `open`. The separate
+`.admission.lock` protects this file; closure never overwrites a resource
+manifest that a mutation worker may be updating. A missing or invalid gate for
+this protocol fails closed. Closed gates are never reopened.
+
+Normal controller tools such as Ansible may create new task sessions themselves.
+After validating the complete handoff and effective role/scenario/backend/
+ephemeral binding, admission locks **resources then admission**. It proves the
+helper's entire PPID ancestry to the still-live, birth-checked journalled outer
+worker. Linux pidfds pin every inspected process through the journal commit;
+boot, UID, PID birth, SID, PPID and liveness are checked, then the whole chain is
+re-read. Every session leader must itself be alive and in that proven chain.
+All new session leaders, not only the helper's, are journalled before admission
+returns. Same UID or a claimed parent PID alone grants no authority. Worker
+records keep their original boot/PID/start shape so mutation seals remain bound
+to the exact registered identity.
+
+Prior authorization is not a mutation permit: at the actual lifecycle boundary,
+while holding resources, the helper takes admission again and reloads identity,
+running status, current session registration and the open gate. Create intent
+is persisted before releasing admission; long backend work holds resources only.
+Mapping-only supervised destroy also refuses a closed gate.
+
+Cleanup (including cancellation) holds the generation supervisor lock, closes
+admission durably, takes its latest worker snapshot under admission, releases
+admission, and only then signals/waits for the registered sessions. It never
+holds admission while waiting for resources or workers, nor resources while
+quiescing them. A registrar already holding admission must commit before the
+close snapshot; a registrar waiting on resources finds the gate closed and
+cannot add a mutation afterward. After quiescence, resource locking and the
+existing completion-seal barrier apply.
+
+The supervisor's separately gated cleanup worker is the only exception to closed
+scenario admission: it needs the exact journalled operation/session identity,
+`purpose: supervisor-cleanup`, cleaning status and a closed gate. The start gate
+is released only after that worker and operation are durable. This does not
+reopen admission or permit scenario commands through the closed gate.
+
+This supports admitted normal-tool sessions, **not generic process containment**.
+An unregistered descendant must not independently mutate host backend resources
+before admission. Detached/escaping host mutation workers, controller async and
+host sudo workers remain unsupported. Guest-only untracked phases do not extend
+this into a general containment guarantee. Historical manifests without the
+admission protocol retain their original same-session authorization and recovery;
+new ancestry/session provenance is never invented for old records.
+
+One narrow orphan-allocation recovery is supported by `scripts/test-run cleanup
+UUID` (also explicit reap): a direct manifest marked publication-pending whose
+context pointer was never published, with no workers, operations, guests,
+network, storage probe or instance mapping, may release its unused lease.
+Recovery locks context before supervisor/resources and revalidates the journal
+and pointer. A pointer naming this generation, any mutation history, or any
+resource intent disqualifies it. A publication-pending manifest whose pointer
+was written before a crash remains accessible through the normal context and
+cannot use this exception. This is not reconciliation of interrupted mutations.
+
+### Supervisor output identity
+
+`scripts/test-run run` emits its first stdout line `Run ID: UUID`, flushed
+**before any worker is started**. All pre-allocation discovery/config command
+output is captured, not relayed to stdout. Consumers must accept that first
+identity exactly once and never replace it with worker output, which is
+untrusted and may contain spoofed `Run ID:` lines. On completion, use
+`scripts/test-run inspect UUID` and validate its `id`, canonical `role`,
+`scenario` and `backend` against the original request as well as its `status`.
+Do not infer cleanup success from worker logs or supervisor termination.
 
 `scripts/test-run` supervises **one full `molecule test`**, with a private
 network, subnet, ephemeral directory and physical resource names. Logical
 inventory names remain stable. It does not monitor CPU, RAM or storage
-capacity. Runtime acceptance on the supported Ansible lines is pending;
-do not migrate production role testing until that evidence is recorded.
+capacity. Bounded current-controller runtime acceptance is recorded below.
+The full supported controller/OS matrix remains pending; do not interpret the
+current results as unrestricted production-role migration approval.
 
 ## Prerequisites and scope
 
@@ -30,14 +235,16 @@ overlapping networks while tests are running.
 Libvirt NAT is **not a security boundary**. Guests can reach the host and
 other routable networks; this tool is collision isolation, not sandboxing
 untrusted code. Role playbooks and scenario configuration remain trusted.
-Controller subprocesses must remain in their worker session: detached host
-daemons, Ansible async tasks, host-side `setsid`, and host-side sudo workers
-are outside the supported scenario contract. Guest services are unaffected
-by this controller restriction.
+Host backend mutation must remain in a journalled worker session. Normal tools'
+new task sessions are supported only through the supervised admission protocol
+above, before any host backend mutation. Detached host daemons, controller
+async tasks, arbitrary host-side `setsid` mutation workers and host-side sudo
+workers remain outside the contract. Guest services are unaffected; guest-only
+untracked phases are not claimed to be generically contained.
 
 ## Migration
 
-There is no automatic conversion of legacy scenarios. Existing direct
+There is no automatic conversion of legacy scenarios. Existing legacy
 `molecule` commands and the legacy KVM launchers keep their behavior.
 Managed scenarios use the **default** driver for both backends and the shared
 managed create/destroy playbooks, never the Podman plugin's destructive
@@ -304,6 +511,40 @@ the tool never adopts a file merely because its name matches.
 
 ## Verification
 
+### Recorded runtime acceptance
+
+The following bounded results were recorded on 2026-11-19 with Python 3.12.16,
+Ansible Core 2.20.8 and Molecule 26.8.0 in the current controller environment,
+using Rocky Linux 10 guests. The lifecycle remains experimental outside this
+verified scope. No wrapper or orchestrator is required for direct commands.
+
+| Mode and scenario | Observed result |
+| --- | --- |
+| Direct Podman smoke | Full implemented test lifecycle passed, including initial destroy, syntax, create, converge, idempotence, verify and final destroy. |
+| Direct retained Podman | Separate create/converge/verify/destroy commands passed; the generation stayed stable through retained use, and the next create allocated a new generation. |
+| Direct KVM smoke | Full implemented test lifecycle passed. |
+| Supervised KVM smoke | Full implemented lifecycle with a fresh guest passed; real helper inspect from guest phases verified the supervised context, and outer cleanup completed with sealed operations. |
+| Concurrent supervised Podman | Two runs of the same fixture had distinct generations, subnets, networks and guest identities. Cancellation after sealed host create returned 130 and cleaned that run; its peer completed the implemented lifecycle with exit 0 and cleaned successfully. |
+| Direct three-node Ceph | Private Galaxy ansible.posix 2.1.0 installation, initial destroy, lifecycle, idempotence (`changed=0` on all three hosts), role verification and final sealed cleanup passed. The private collection remained installed through final destroy/pruning. |
+
+Only implemented fixture phases are counted; optional missing playbooks are not
+reported as passed. The concurrent supervised fixtures were small Podman
+scenarios, **not concurrent Ceph clusters**. No full supervised Ceph acceptance
+is claimed, nor a separately repeated direct/supervised overlap after the
+admission fix.
+
+Cancellation was tested **after completed, sealed host create**, not during a
+host-daemon mutation. Actual daemon interruption, delayed completion and
+destructive crash/reboot recovery remain unverified; conservative incomplete-
+operation refusal is supported by mocked tests, not actual-daemon cancellation
+proof. Other guest OS versions and minimum/next controller runtime lanes remain
+outside this acceptance record.
+
+The corresponding backend-free record includes 159 passing Python tests and a
+passing earlier shell-check run; the affected overlay-cleanup fixture passed
+separately after its mock repair. Dependency-pin
+validation remains a separate requirement and is not implied by runtime success.
+
 Cheap unit checks:
 
 ```bash
@@ -312,7 +553,8 @@ bash -n scripts/kvm-vm scripts/kvm-base-image
 git diff --check
 ```
 
-The tester owns runtime acceptance, on each supported pinned line:
+The tester owns the remaining full runtime matrix on each supported pinned
+line and relevant guest OS. Extend the bounded evidence above with:
 
 1. Run two identical scenarios concurrently for each backend. Confirm distinct
    networks/subnets, guest/container IDs, disks/SSH keys and ephemeral state,
@@ -324,4 +566,6 @@ The tester owns runtime acceptance, on each supported pinned line:
 5. Replace an owned resource's name with a foreign identity and confirm cleanup
    refuses it. Verify cached base images and unrelated guests remain untouched.
 
-These are required acceptance checks, **not results already demonstrated**.
+The table records only the demonstrated subset. The complete matrix, including
+host-mutation interruption, crash/reboot recovery, replacement refusal and
+concurrent KVM acceptance, is not established by those bounded results.
