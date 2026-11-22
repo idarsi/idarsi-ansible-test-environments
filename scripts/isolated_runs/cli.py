@@ -10,6 +10,7 @@ import signal
 import sys
 import tempfile
 import uuid
+import xml.etree.ElementTree as ET
 
 from .backends import Backend, REPO, validate_platforms
 from . import admission
@@ -25,10 +26,15 @@ def parse_configuration(role: Path, scenario: str, environment: dict, direct: bo
         effective_environment = dict(environment)
         if not direct:
             effective_environment["MOLECULE_EPHEMERAL_DIRECTORY"] = str(Path(temporary) / "ephemeral")
-        data = json.loads(command(
+        response = command(
             ["python3", str(REPO / "scripts/isolated_runs/molecule_config.py"), str(source)],
             env=effective_environment, cwd=str(role),
-        ))
+        )
+        try:
+            data = json.loads(response)
+        except json.JSONDecodeError:
+            reason = "empty" if not response.strip() else "malformed"
+            raise RunError("Molecule config bridge returned " + reason + " JSON response") from None
     if not isinstance(data, dict):
         raise RunError("Scenario config must be a mapping")
     if data.get("driver", {}).get("name") != "default":
@@ -324,6 +330,24 @@ def main(argv=None) -> int:
     commands.add_parser("list")
     for name in ("inspect", "cleanup"):
         commands.add_parser(name).add_argument("run_id")
+    recovery = commands.add_parser(
+        "recover-destroy", help="Exact supervised KVM network-tail recovery; no force or automatic maintenance",
+        description=(
+            "Boot-fenced absence-only recovery. Absent historical controller environment "
+            "annotations use measured canonical ansible-current context; conflicting values "
+            "refuse. Preparation writes a new current-host observation, not historical proof "
+            "or reboot authorization."
+        ),
+    )
+    recovery.add_argument("run_id")
+    recovery.add_argument("--operation", required=True)
+    recovery_mode = recovery.add_mutually_exclusive_group(required=True)
+    recovery_mode.add_argument("--dry-run", action="store_true")
+    recovery_mode.add_argument("--apply", action="store_true")
+    recovery_mode.add_argument(
+        "--prepare-maintenance", action="store_true",
+        help="Write a current-host audit observation only; never reboot or clean resources",
+    )
     reap = commands.add_parser("reap", help="Explicit recovery; never age-based")
     mode = reap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
@@ -333,6 +357,43 @@ def main(argv=None) -> int:
     internal.add_argument("run_id")
     args = parser.parse_args(argv)
     os.umask(0o077)
+    if args.command == "recover-destroy":
+        from . import recovery
+        from .recovery_host import canonical_uuid
+
+        identity = {}
+        store = None
+        try:
+            canonical_uuid(args.run_id)
+            canonical_uuid(args.operation)
+            identity = {"run_id": args.run_id, "operation": args.operation}
+            store = Store.open_existing()
+            action = recovery.prepare if args.prepare_maintenance else (
+                recovery.apply if args.apply else recovery.inspect
+            )
+            result = action(store, args.run_id, args.operation)
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result.get("eligible") or result.get("outcome") == "maintenance_prepared" else 1
+        except (RunError, OSError, ValueError, KeyError, TypeError, AttributeError, ET.ParseError) as exc:
+            # Do not publish backend stderr, private config, paths or journals.
+            reason = str(exc) if isinstance(exc, RunError) else "recovery_validation_failed"
+            if isinstance(exc, ET.ParseError):
+                reason = "network_inventory_xml_invalid"
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason):
+                reason = "recovery_probe_failed"
+            outcome = "blocked"
+            if store is not None and args.apply and identity:
+                try:
+                    current = store.load(args.run_id)
+                    if current.get("recoveries", {}).get("attempts") and current.get("status") != "cleaned":
+                        outcome = "partial"
+                except (RunError, OSError, ValueError, KeyError, TypeError, AttributeError):
+                    pass
+            print(json.dumps({
+                **identity, "eligible": False,
+                "outcome": outcome, "blockers": [reason],
+            }, sort_keys=True))
+            return 1
     try:
         store = Store()
         if args.command == "run":

@@ -1,5 +1,62 @@
 # Testing
 
+## Interrupted network-tail recovery checks
+
+Use an already activated approved shared controller; do not create a worktree
+venv:
+
+```bash
+python -B -m unittest discover -s tests -p 'test_isolated_recovery*.py' -v
+```
+
+These stdlib tests use temporary private Stores and fake host/backend evidence.
+They cover non-writing dry-run, current-host observation, all-worker boot
+matching, changed host/digest rejection, postboot absence reconciliation,
+missing-seal preservation, strict ordinary cleanup, unknown protocols,
+private existing locks/hardlinks, interrupted phases/retry, allocator-last
+ordering and failed final-write rollback. Resource fixtures reject replaced
+networks, bridge/interface/route/firewall leftovers, helper uncertainty,
+foreign consumers, query failure and network reappearance. Journal fixtures
+query exact-boot unique machine metadata without messages.
+Review regressions additionally cover enclosing nft bitmask/unknown-expression
+refusal, semantic literal/prefix/range/set selectors, full procfs visibility
+(hidepid and unreadable metadata refuse), unknown helper configurations/includes,
+escaped nested volatile mounts, bounded malformed XML in either inventory pass,
+and absent-only legacy environment compatibility with measured runtime/source
+receipts. Interpreter fixtures verify approved lane/pins, module origins and
+normal trusted venv symlinks without using an actual controller/host probe.
+Legacy firewall regressions exercise the exact hexadecimal `u32` enclosing-network
+case, unknown extensions/options and malformed save syntax. Fake postboot apply
+tests inject opaque selectors into either iptables view and require retained
+lease/network intent, original missing seal and no resources_verified phase.
+Security regressions additionally intercept the subprocess boundary (never
+executing a tool) to verify authenticated fixed paths, root symlink/ACL policy,
+multicall aliases, explicit restricted environment and read-only query grammar.
+Reused network/domain/interface guards are exercised through that same runner.
+Route fixtures cover gateway/source/via association, both address families,
+explicit multipath, malformed destinations/unresolved references and corruption
+during repeated verification, including original-seal/lease preservation and
+bounded CLI errors.
+
+There is **no approved teardown-driver profile**. Present networks always block;
+these tests do not claim RPC cancellation, helper termination or real recovery.
+Review and security review precede any real dry-run or maintenance preparation.
+Before requesting a host reboot, the tester must establish persistent state,
+fresh native observation validity and a viable postboot read-only check path,
+including permissions for `nft`, `iptables-save` and `ip6tables-save`. Surviving
+resources remain blocked. The current helper-association implementation also
+requires a fully visible/readable procfs and **no current dnsmasq/radvd at all**;
+even an unrelated default-network helper blocks because no config/include
+association parser is approved. This may make postboot readiness unavailable,
+and must be determined before requesting maintenance, not worked around by
+stopping foreign services. Preparation authorizes neither reboot nor apply.
+Readiness must also validate the fixed root-owned tool entry/target paths and
+ability to query with the restricted environment and read-only virsh connection.
+Caller wrappers, user configuration and PATH substitutions cannot make proof pass.
+Full `make validate`, `yamllint .`, small owned-process crash fixtures and any
+separately authorized runtime acceptance remain tester-owned.
+See the [operator contract](docs/isolated-test-runs.md#interrupted-network-tail-recovery).
+
 ## Recorded bounded acceptance
 
 On 2026-11-19, runtime acceptance passed with Python 3.12.16, Ansible Core
