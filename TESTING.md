@@ -25,6 +25,11 @@ escaped nested volatile mounts, bounded malformed XML in either inventory pass,
 and absent-only legacy environment compatibility with measured runtime/source
 receipts. Interpreter fixtures verify approved lane/pins, module origins and
 normal trusted venv symlinks without using an actual controller/host probe.
+Namespace fixtures distinguish unreadable/missing or invalid procfs identities
+(including an empty link with a directory stat result) from validated namespace
+mismatches. Both block recovery; equal valid identities pass only this guard.
+These mocked checks neither identify the cause of a host anomaly nor establish
+that recovery is unblocked.
 Legacy firewall regressions exercise the exact hexadecimal `u32` enclosing-network
 case, unknown extensions/options and malformed save syntax. Fake postboot apply
 tests inject opaque selectors into either iptables view and require retained

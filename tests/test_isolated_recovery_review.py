@@ -24,6 +24,97 @@ REAL_HELPERS = network.helpers_absent
 PROC_MOUNT = "1 0 0:1 / /proc rw,nosuid,nodev,noexec - proc proc rw\n"
 
 
+class NamespaceContextTests(unittest.TestCase):
+    def setUp(self):
+        self.links = {}
+        self.stats = {}
+        for number, namespace in enumerate(("net", "mnt", "pid", "user"), start=100):
+            for process in ("self", "1"):
+                path = Path("/proc") / process / "ns" / namespace
+                self.links[path] = f"{namespace}:[{number}]"
+                self.stats[path] = SimpleNamespace(
+                    st_mode=stat.S_IFREG | 0o444, st_dev=4, st_ino=number,
+                )
+
+        def readlink(path):
+            return self.links[path]
+
+        def namespace_stat(path):
+            return self.stats[path]
+
+        links = patch.object(recovery.os, "readlink", side_effect=readlink)
+        stats = patch.object(Path, "stat", autospec=True, side_effect=namespace_stat)
+        self.readlink = links.start()
+        self.addCleanup(links.stop)
+        self.namespace_stat = stats.start()
+        self.addCleanup(stats.stop)
+
+    def test_equal_valid_identities_pass(self):
+        self.assertIsNone(recovery.namespace_context())
+        self.assertEqual(self.readlink.call_count, 8)
+        self.assertEqual(self.namespace_stat.call_count, 8)
+
+    def test_valid_different_identities_are_unsupported(self):
+        for path, original in self.stats.items():
+            with self.subTest(path=path):
+                self.stats[path] = SimpleNamespace(
+                    st_mode=original.st_mode, st_dev=original.st_dev, st_ino=999,
+                )
+                self.links[path] = f"{path.name}:[999]"
+                with self.assertRaisesRegex(RunError, "^unsupported_controller_namespace$"):
+                    recovery.namespace_context()
+                self.stats[path] = original
+                self.links[path] = f"{path.name}:[{original.st_ino}]"
+
+    def test_invalid_identity_is_unproven_not_a_namespace_mismatch(self):
+        for path, original in self.stats.items():
+            for link, mode, inode in (
+                ("", stat.S_IFDIR | 0o555, 1),
+                ("", original.st_mode, original.st_ino),
+                (self.links[path], stat.S_IFDIR | 0o555, original.st_ino),
+                ("not-a-namespace", original.st_mode, original.st_ino),
+                (f"unknown:[{original.st_ino}]", original.st_mode, original.st_ino),
+                (f"{path.name}:[0]", original.st_mode, 0),
+                (f"{path.name}:[999]", original.st_mode, original.st_ino),
+            ):
+                with self.subTest(path=path, link=link, mode=mode, inode=inode):
+                    self.links[path] = link
+                    self.stats[path] = SimpleNamespace(
+                        st_mode=mode, st_dev=original.st_dev, st_ino=inode,
+                    )
+                    with self.assertRaisesRegex(RunError, "^controller_namespace_unproven$"):
+                        recovery.namespace_context()
+            self.stats[path] = original
+            self.links[path] = f"{path.name}:[{original.st_ino}]"
+
+    def test_unreadable_or_missing_identity_is_unproven(self):
+        for boundary in (self.readlink, self.namespace_stat):
+            original = boundary.side_effect
+            for error in (PermissionError, FileNotFoundError):
+                for target in self.links:
+                    def inaccessible(path):
+                        if path == target:
+                            raise error("private procfs details")
+                        return original(path)
+
+                    with self.subTest(boundary=boundary, error=error, path=target):
+                        boundary.side_effect = inaccessible
+                        with self.assertRaisesRegex(RunError, "^controller_namespace_unproven$"):
+                            recovery.namespace_context()
+            boundary.side_effect = original
+
+    def test_invalid_identity_takes_precedence_over_valid_mismatch(self):
+        self.stats[Path("/proc/1/ns/net")].st_dev = 5
+        self.links[Path("/proc/1/ns/user")] = ""
+        with self.assertRaisesRegex(RunError, "^controller_namespace_unproven$"):
+            recovery.namespace_context()
+
+    def test_valid_different_devices_are_unsupported(self):
+        self.stats[Path("/proc/1/ns/net")].st_dev = 5
+        with self.assertRaisesRegex(RunError, "^unsupported_controller_namespace$"):
+            recovery.namespace_context()
+
+
 class ReviewStateTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.RecoveryTests(methodName="runTest")

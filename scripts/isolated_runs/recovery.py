@@ -50,11 +50,27 @@ def trusted_path(path: Path, *, interpreter_entry: bool = False) -> Path:
 
 
 def namespace_context() -> None:
+    """Compare only observable, internally consistent namespace identities."""
+    identities = []
     for namespace in ("net", "mnt", "pid", "user"):
-        own = (Path("/proc/self/ns") / namespace).stat()
-        init = (Path("/proc/1/ns") / namespace).stat()
-        if (own.st_dev, own.st_ino) != (init.st_dev, init.st_ino):
-            raise RunError("unsupported_controller_namespace")
+        pair = []
+        for process in ("self", "1"):
+            path = Path("/proc") / process / "ns" / namespace
+            try:
+                link = os.readlink(path)
+                info = path.stat()
+            except OSError as exc:
+                raise RunError("controller_namespace_unproven") from exc
+            # An empty procfs link can resolve to a directory, not a namespace.
+            if (
+                not stat.S_ISREG(info.st_mode) or info.st_ino <= 0
+                or link != f"{namespace}:[{info.st_ino}]"
+            ):
+                raise RunError("controller_namespace_unproven")
+            pair.append((info.st_dev, info.st_ino))
+        identities.append(pair)
+    if any(own != init for own, init in identities):
+        raise RunError("unsupported_controller_namespace")
 
 
 def package_origin(location: Path, prefix: Path, python_version: tuple) -> Path:
