@@ -57,6 +57,35 @@ def namespace_context() -> None:
             raise RunError("unsupported_controller_namespace")
 
 
+def package_origin(location: Path, prefix: Path, python_version: tuple) -> Path:
+    """Authenticate only the standard same-prefix lib64 -> lib metadata alias."""
+    site = prefix / "lib" / ("python" + ".".join(map(str, python_version))) / "site-packages"
+    alias = prefix / "lib64"
+    alias_site = alias / site.relative_to(prefix / "lib")
+    if location not in (site, alias_site) or trusted_path(prefix) != prefix:
+        raise RunError("approved_controller_tooling_unproven")
+    before = None
+    if location == alias_site:
+        info = alias.lstat()
+        if (
+            not stat.S_ISLNK(info.st_mode) or info.st_uid not in (0, os.getuid())
+            or os.readlink(alias) != "lib"
+        ):
+            raise RunError("approved_controller_tooling_unproven")
+        before = (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_mtime_ns, info.st_ctime_ns)
+    # The general validator remains strict: lib itself, the Python directory,
+    # site-packages, prefix and all ancestors may NOT be symlinks.
+    origin = trusted_path(site)
+    if origin != site or not stat.S_ISDIR(origin.lstat().st_mode):
+        raise RunError("approved_controller_tooling_unproven")
+    if before is not None:
+        info = alias.lstat()
+        after = (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_mtime_ns, info.st_ctime_ns)
+        if before != after or os.readlink(alias) != "lib":
+            raise RunError("approved_controller_tooling_unproven")
+    return origin
+
+
 def executing_context() -> dict:
     """Measure actual executing modules and approved interpreter, never env claims."""
     root = trusted_path(REPO)
@@ -109,15 +138,17 @@ def executing_context() -> dict:
         sources[action] = hashlib.sha256(path.read_bytes()).hexdigest()
     if sources["backends"] != BACKEND_SOURCE:
         raise RunError("unsupported_original_source_profile")
-    site = prefix / "lib" / ("python" + ".".join(map(str, expected_python))) / "site-packages"
+    origins = {}
     for package, expected in (("ansible-core", ansible), ("molecule", molecule)):
         try:
             distribution = importlib.metadata.distribution(package)
         except importlib.metadata.PackageNotFoundError as exc:
             raise RunError("approved_controller_tooling_unproven") from exc
         location = Path(distribution.locate_file(""))
-        if distribution.version != expected or trusted_path(location) != site:
+        origin = package_origin(location, prefix, expected_python)
+        if distribution.version != expected:
             raise RunError("approved_controller_tooling_unproven")
+        origins[package] = str(origin)
     namespace_context()
     return {
         "root": str(root), "prefix": str(prefix), "lane": prefix.name,
@@ -126,6 +157,7 @@ def executing_context() -> dict:
         "activation_sha256": hashlib.sha256(activation.read_bytes()).hexdigest(),
         "python_version": list(sys.version_info[:3]),
         "tooling": {"ansible-core": ansible, "molecule": molecule},
+        "package_origins": origins,
         "sources": sources,
     }
 
