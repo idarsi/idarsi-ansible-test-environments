@@ -42,10 +42,11 @@ def podman_context() -> dict:
     }
 
 
-def libvirt_networks() -> list:
+def libvirt_networks(runner=None) -> list:
+    query = command if runner is None else runner
     networks = []
-    for identity in command(VIRSH + ["net-list", "--all", "--uuid"]).splitlines():
-        root = ET.fromstring(command(VIRSH + ["net-dumpxml", identity]))
+    for identity in query(VIRSH + ["net-list", "--all", "--uuid"]).splitlines():
+        root = ET.fromstring(query(VIRSH + ["net-dumpxml", identity]))
         networks.append(root)
     return networks
 

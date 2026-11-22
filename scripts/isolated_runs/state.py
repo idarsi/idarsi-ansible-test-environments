@@ -81,6 +81,30 @@ def lock(path: Path, blocking: bool = True):
         os.close(fd)
 
 
+@contextlib.contextmanager
+def existing_lock(path: Path):
+    """Recovery-only nonblocking lock, without creating or repairing any file."""
+    fd = os.open(str(path), os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+        ):
+            raise RunError("unsafe_existing_lock")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RunError("recovery_lock_busy") from exc
+        if (path.lstat().st_dev, path.lstat().st_ino) != (info.st_dev, info.st_ino):
+            raise RunError("recovery_lock_replaced")
+        yield fd
+        if (path.lstat().st_dev, path.lstat().st_ino) != (info.st_dev, info.st_ino):
+            raise RunError("recovery_lock_replaced")
+    finally:
+        os.close(fd)
+
+
 class Store:
     """One allocator per real Unix user, independent of clone and XDG overrides."""
 
@@ -90,6 +114,23 @@ class Store:
 
             root = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".idarsi-test-runs"
         self.root = private_directory(root)
+
+    @classmethod
+    def open_existing(cls, root: Path = None):
+        """Open recovery state without mkdir, directory fsync or initialization."""
+        if root is None:
+            import pwd
+
+            root = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".idarsi-test-runs"
+        info = root.lstat()
+        if (
+            not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700
+        ):
+            raise RunError("Unsafe existing state directory")
+        instance = cls.__new__(cls)
+        instance.root = root
+        return instance
 
     def ephemeral(self, run_id: str) -> Path:
         """Disposable Molecule state is never an ancestor of the journal."""
@@ -116,7 +157,7 @@ class Store:
             info = os.fstat(stream.fileno())
             if (
                 not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) != 0o600
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
             ):
                 raise RunError("Manifest must be a private regular file owned by this UID")
             data = json.load(stream)

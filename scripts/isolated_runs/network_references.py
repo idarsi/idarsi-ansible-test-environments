@@ -51,11 +51,13 @@ def owned_bridge(root, intent: dict, subnet: str) -> str:
 class InterfaceReferences:
     """Resolve network names/UUIDs and kernel interface alternative names."""
 
-    def __init__(self, bridge: str, intent: dict, networks: list):
+    def __init__(self, bridge: str, intent: dict, networks: list, bridge_absent: bool = False, runner=None):
         self.bridge = bridge
         self.intent = intent
         self.networks = networks
         self.links = None
+        self.bridge_absent = bridge_absent
+        self.command = command if runner is None else runner
 
     def bridge_reference(self, name: str) -> None:
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,127}", name):
@@ -63,7 +65,7 @@ class InterfaceReferences:
         if name == self.bridge:
             raise RunError("Owned bridge is referenced by a foreign domain")
         if self.links is None:
-            result = json.loads(command(["ip", "-j", "link", "show"]))
+            result = json.loads(self.command(["ip", "-j", "link", "show"]))
             if not isinstance(result, list):
                 raise RunError("Incomplete kernel interface discovery")
             links = {}
@@ -79,8 +81,13 @@ class InterfaceReferences:
                         raise RunError("Ambiguous kernel interface alias")
                     links[alias] = item
             if self.bridge not in links:
+                if self.bridge_absent:
+                    self.links = links
+                    return
                 raise RunError("Owned bridge disappeared during dependency discovery")
             self.links = links
+        if self.bridge not in self.links and self.bridge_absent:
+            return
         owned_index = self.links[self.bridge]["ifindex"]
         source = self.links.get(name)
         # A complete kernel listing proves an absent different name is not a
@@ -151,19 +158,22 @@ class InterfaceReferences:
                 self.check_interface(resolved)
 
 
-def assert_network_unused(root, intent: dict, subnet: str, networks: list) -> None:
+def assert_network_unused(
+    root, intent: dict, subnet: str, networks: list, *, bridge_absent: bool = False, runner=None,
+) -> None:
+    query = command if runner is None else runner
     bridge = owned_bridge(root, intent, subnet)
-    references = InterfaceReferences(bridge, intent, networks)
-    all_domains = set(command(VIRSH + ["list", "--all", "--uuid"]).splitlines())
-    active = set(command(VIRSH + ["list", "--uuid"]).splitlines())
-    persistent = set(command(VIRSH + ["list", "--all", "--persistent", "--uuid"]).splitlines())
+    references = InterfaceReferences(bridge, intent, networks, bridge_absent=bridge_absent, runner=query)
+    all_domains = set(query(VIRSH + ["list", "--all", "--uuid"]).splitlines())
+    active = set(query(VIRSH + ["list", "--uuid"]).splitlines())
+    persistent = set(query(VIRSH + ["list", "--all", "--persistent", "--uuid"]).splitlines())
     if active | persistent != all_domains:
         raise RunError("Domain inventory changed during network dependency discovery")
     for identity in sorted(all_domains):
         try:
             if identity in active:
-                references.check_domain(ET.fromstring(command(VIRSH + ["dumpxml", identity])), identity)
+                references.check_domain(ET.fromstring(query(VIRSH + ["dumpxml", identity])), identity)
             if identity in persistent:
-                references.check_domain(ET.fromstring(command(VIRSH + ["dumpxml", identity, "--inactive"])), identity)
+                references.check_domain(ET.fromstring(query(VIRSH + ["dumpxml", identity, "--inactive"])), identity)
         except ET.ParseError as exc:
             raise RunError("Malformed foreign domain XML during network discovery") from exc

@@ -1,5 +1,192 @@
 # Shared direct and supervised test runs (experimental)
 
+## Interrupted network-tail recovery
+
+Use the **original canonical helper and original activated controller**, never
+a worktree alias substituted into a TUI context:
+
+```bash
+scripts/test-run recover-destroy RUN_UUID --operation DESTROY_UUID --dry-run
+scripts/test-run recover-destroy RUN_UUID --operation DESTROY_UUID --prepare-maintenance
+scripts/test-run recover-destroy RUN_UUID --operation DESTROY_UUID --apply
+```
+
+Exactly one mode is required. There is no force, bulk reset, caller proof JSON,
+PID/URI/path override, automatic reboot or daemon restart. Dry-run validates
+existing private files and temporarily acquires existing kernel locks, without
+initialization, directory fsync, manifest writes, signals, gate closure or
+backend mutation. Bounded JSON reports eligibility/blocker codes, not private
+manifests, machine IDs, environment values or journal messages. Blocked exits
+are nonzero.
+
+Scope is supervised `sealed-v1`/`session-v1` KVM: exactly one incomplete last
+`destroy`/`supervisor-cleanup`, registered worker, all earlier operations sealed,
+guests **exactly `[]`**, no storage probe/pending work, and a complete generated
+transient NAT network intent. The reviewed synchronous legacy backend saves
+guest-empty state only after guarded storage cleanup. Original canonical
+role/scenario/helper/controller, local system-libvirt context and trusted source
+profile must match. Direct, Podman, create, guest-tail, unknown protocols and
+foreign/replaced resources remain unsupported.
+
+The two historical environment annotations `IDARSI_TEST_ENVIRONMENT` and
+`VIRTUAL_ENV` are optional **only when absent**, not when null, empty, malformed,
+nonexistent or conflicting. Their absence reports
+`historical_controller_environment_unrecorded` and uses
+`legacy_runtime_measured` in the current `ansible-current` lane. Original
+role/scenario/local backend and both create/destroy playbooks remain mandatory.
+The actual executing module/entry root must equal their common canonical root;
+current controller provenance is measured from `sys.prefix`, `sys.executable`,
+trusted venv entry/target and reviewed existing tooling versions, never caller
+environment claims. Foreign imports, arbitrary prefixes and worktree aliases
+block. Standard venv interpreter symlinks are accepted only with trusted
+entry/target paths. Original environment/config fields are never backfilled.
+This exception enables diagnostics, native preparation and boot-fenced
+absence-only reconciliation, never same-boot recovery or teardown.
+
+### Boot proof and maintenance preparation
+
+Same-boot recovery requires an audited actual running daemon/loaded driver/vendor
+profile **and** authoritative historical no-detaching-hook evidence. Installed
+virsh version, current hook absence and operator confirmation are insufficient.
+This release has no accepted historical receipt/profile; that route reports
+`historical_hook_receipt_missing`, never a fictitious RPC drain.
+
+The supported route requires the current kernel boot to differ from **every**
+original worker boot, with same-host provenance. Either verified root-controlled
+persistent local journals must supply matching trusted boot/machine metadata,
+or a previously recorded native current-host observation must validate.
+Missing/conflicting/inaccessible journal evidence blocks; a path is not proof.
+
+`--prepare-maintenance` makes a **nonterminal private audit write** only.
+Under existing supervisor/resources locks it independently measures the current
+kernel boot and root-controlled machine identity, requires every original worker
+boot to match, checks a supported persistent local filesystem, and durably binds
+the observation to the exact original operations/workers/resources/configuration
+digest. It never closes admission, signals, queries/mutates backend resources,
+releases leases, acknowledges TUI admission or reboots. Identical preparation
+is idempotent; changed bindings cannot overwrite the observation. It cannot
+backfill proof after a reboot.
+
+This links a measured **present** boot to present host identity, not an invented
+incident-time machine ID or root-signed attestation. It uses the project's
+cooperative trusted-UID/private-Store and trusted local root model: malicious
+same-UID edits, copied/migrated state, cloned identity, hostile root and remote
+jobs are outside that boundary. After a separately authorized later reboot,
+the machine identity must match and the boot differ from the observation and
+all original workers.
+
+**Before asking for reboot:** finish review/security/fake-process checks; validate
+canonical helper/controller readiness and private persistent state (not volatile,
+remote, uncertain or auto-cleaned storage); perform authorized native preparation
+and validate it freshly; establish that postboot read-only checks can succeed.
+The filesystem allowlist alone does not certify administrator retention policy.
+A reboot interrupts host-wide work and requires separate explicit approval.
+Preparation and ordinary owned-test stopping do not grant it. Same-boot legacy
+runs remain blocked now.
+
+### Absence-only reconciliation and audit history
+
+This release implements the postboot **already absent** branch. Successful
+local-libvirt discovery must prove the original UUID/name absent; complete
+interface/address/route, nftables and legacy iptables reads must prove the exact
+generated bridge/subnet/firewall footprint absent. Canonical read-only foreign
+domain/network dependency checks remain. Current associated helpers, ambiguous
+process metadata, bridge replacement, foreign use, incomplete queries and
+permissions failures retain the lease. Reads of `nft`, `iptables-save` and
+`ip6tables-save` must already be authorized; there is no privilege escalation
+or dependency installation to make proof pass.
+
+Recovery queries do **not** use caller PATH or the ordinary lifecycle runner.
+Only fixed `/usr/sbin/{ip,nft,iptables-save,ip6tables-save}` and `/usr/bin/virsh`
+entry paths are supported. Every ancestor and symlink hop/target must be
+root-controlled, not group/world/current-UID writable; merged-/usr and root
+alternatives links are supported. The resolved target is executed explicitly,
+preserving the validated alias for xtables multicall operation. Missing or
+untrusted tools block; there is no PATH fallback, sudo or installation.
+This follows the existing non-root controller contract.
+
+The recovery runner permits only enumerated read-query argument forms, adds
+`--readonly` to the exact `qemu:///system` virsh connection, and passes an
+explicit minimal environment: C locale, root-owned binary search directories,
+HOME/XDG roots `/`, and disabled virsh history. Caller loader/auth/URI/shell/
+Python configuration is not inherited; stdin and stderr are discarded, cwd is
+`/`, and query time/output parsing are bounded. The same runner is injected
+into both libvirt inventories and all reused foreign-domain/interface guards.
+Ordinary lifecycle command behavior is unchanged.
+
+Route proof queries **both IPv4 and IPv6**, validating typed destination,
+gateway, preferred/source/from addresses, supported explicit `via` family/
+address objects and nexthop/multipath paths. An associated gateway/source
+blocks even with a disjoint destination and `onlink`. Exact `default` is a
+valid destination sentinel, not a blanket subnet overlap; its gateway, source
+and interface still must be unrelated. Malformed address strings, unknown
+schema, unresolved `nhid`, encapsulation and unsupported nexthop forms block
+instead of becoming negative evidence. No route repair is attempted.
+
+Firewall evaluation intentionally supports a small nft selector whitelist:
+literal/prefix/range/set address equality and interface-name equality/wildcards.
+Bitmask/arithmetic, inverted or unknown expressions and named-set references
+are uncertainty blockers, not evidence of absence. String traversal alone is
+not a semantic proof. Unsupported rules may block even when an administrator
+knows them to be unrelated; no automatic firewall rewrite is provided.
+Both iptables save views likewise require complete framing and a tokenized
+selector whitelist: literal source/destination networks, interfaces (including
+trailing `+`), basic protocols/ports, explicit conntrack/state tests and comments.
+Unknown extensions/options, inversions, opaque `u32`/BPF/ipset/iprange selectors,
+arbitrary chain dispatch and NAT targets block instead of relying on dotted-IP
+string searches. Missing extension arguments and malformed quoting also block;
+no save output is executed or printed as an error.
+
+Helper absence additionally requires a full root procfs with unrestricted PID
+visibility and readable, stable per-process birth/UID/comm/cmdline/executable
+metadata (kernel threads/zombies are handled explicitly). Restricted/unknown
+hidepid, subset or overlaid process views block, regardless of assumed UID/gid
+privilege. This MVP has **no approved helper configuration/include parser**:
+any current dnsmasq/radvd blocks, even with apparently unrelated arguments or a
+foreign/default-network config path. No arbitrary config files are read and no
+helper is signalled. Consequently an ordinary default libvirt network may make
+the postboot branch unavailable; readiness must establish this before a reboot
+is proposed. It is not permission to stop foreign helpers or escalate privileges.
+
+No new teardown/hook executes, so a current **mutation** driver profile is not
+needed for this branch. There is deliberately **no approved surviving-network
+teardown profile**: a present network reports
+`current_mutation_profile_unavailable`, without `net-destroy`, `net-undefine`,
+name-based helper kills or ad hoc cleanup. Future teardown requires separately
+reviewed driver/vendor correspondence, synchronous hook policy, pre-erasure
+birth/pidfd-pinned helper ownership and actual helper/kernel/firewall termination.
+API success or UUID absence alone cannot supply that evidence.
+
+Apply independently repeats proof: supervisor authority, additive durable intent,
+closed admission/final original worker journal, canonical session stopping/empty
+checks, then nonblocking resources-lock revalidation. The same-host boot fence
+rules out historical local workers/descendants/daemon requests; PID absence alone
+never does. No resources/admission lock is held while stopping. This read-only
+absence branch launches no new backend resource worker.
+
+Manifest version remains 1. Additive `recoveries.protocol: network-tail-v1`
+retains target/digest/original workers/network, optional `host_observation`
+(`current-host-v1`), measured `current_context` (binding mode/missing-field names,
+canonical runtime paths/source hashes) and attempt IDs/phases: `intent`, `resources_verified`,
+then `reconciled`/`outcome: reconciled`. Retry repeats **all** proofs; a saved phase
+is not a reusable fence. Unknown protocols block. Original operations and missing
+seals are never forged. Verified absence alone permits clearing network intent
+and setting `cleaned`, under allocator lock acquired last without graph-lock
+overlap. Write failures retain evidence and attempt lease rollback; unrecoverable
+filesystem failure is not successful cleanup.
+The native host observation includes a digest of the measured current context;
+later source/controller/path changes invalidate it. There is no silent receipt
+rewrite or automatic compatible-source upgrade. This is a new present-time
+measurement, not historical interpreter attestation.
+Interpreter/activation hashes and current Python/tooling versions are included;
+even a same-path interpreter replacement can invalidate maintenance preparation.
+
+Older helpers can inspect version-1 `cleaned`; ordinary mutation guards still
+reject the original incomplete operation. Reconciliation is not original normal
+PASS. Only after separately authorized real apply and fresh exact-context cleaned
+inspection may the TUI's existing exact-token acknowledgement be used. Never
+delete TUI state or clear another lease. Unit fixtures are not runtime proof.
+
 ## Dual-mode lifecycle and helper v1
 
 The **same managed scenario** supports ordinary `molecule test`, `create`,
@@ -128,6 +315,10 @@ mutation seals; it then journals a separate gated cleanup worker and seals that
 cleanup before releasing the lease. An incomplete create or cleanup retains
 resources and lease even if all backend queries are negative or an object
 appears late. Neither reboot nor client termination proves daemon cancellation.
+These ordinary cleanup guards remain unchanged. The separate
+[network-tail recovery](#interrupted-network-tail-recovery) command requires
+same-host boot provenance plus complete absence evidence; reboot alone is not
+that proof.
 Existing supervised version-1 manifests retain their original recovery path:
 absence of `mutation_protocol` selects that legacy path; no operation seals or
 provenance are backfilled or required for old supervised journals. An explicit

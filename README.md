@@ -9,6 +9,14 @@ See the [recorded scope and remaining matrix](docs/isolated-test-runs.md#verific
 before migrating scenarios; this is not acceptance of every supported OS or
 controller line.
 
+Interrupted supervised KVM **network-tail** destroys have an explicit
+[`recover-destroy` procedure](docs/isolated-test-runs.md#interrupted-network-tail-recovery).
+It preserves the original missing seal. Same-boot legacy recovery and teardown
+of surviving resources remain blocked; there is no force or automatic reboot.
+Maintenance preparation writes audit metadata, not cleanup.
+Missing historical controller-environment annotations use a restricted measured
+current-context path; conflicting recorded values still block.
+
 This repository prepares a Rocky Linux 10 or Fedora 43/44 host for running Molecule tests in
 Idarsi Ansible role repositories. Molecule scenarios stay in each role and
 choose one of two target backends:
