@@ -12,6 +12,7 @@ import uuid
 
 from .backends import Backend, REPO, validate_platforms
 from . import admission
+from . import guest_control
 from .cli import lifecycle, parse_configuration
 from .discovery import discover, podman_context
 from .processes import members, spawn, stop_workers
@@ -38,7 +39,7 @@ def require_completed(data: dict, quiescent: bool = True) -> None:
     for operation in data.get("operations", []):
         if (
             operation.get("completion") != operation["id"]
-            or operation.get("action") not in ("create", "destroy")
+            or operation.get("action") not in ("create", "destroy") + guest_control.ACTIONS
             or operation.get("worker") not in data["workers"]
         ):
             raise RunError(
@@ -46,6 +47,8 @@ def require_completed(data: dict, quiescent: bool = True) -> None:
                 + "; retain resources and lease. Recovery is inspection-only; "
                 "a backend-specific cancellation barrier is not implemented."
             )
+        if operation["action"] in guest_control.ACTIONS:
+            guest_control.validate_operation(operation, data)
     if quiescent and any(members(worker) for worker in data["workers"]):
         raise RunError("Mutation worker session is not empty")
 
@@ -106,6 +109,11 @@ def resolved(args: argparse.Namespace, store: Store) -> tuple:
         "collections_directory": str(ephemeral / "collections"), "generation": None,
         "lifecycle_modes": ["direct", "supervised"], "effective_config_validated": True,
     }
+    if args.backend == "kvm":
+        result.update(
+            guest_control_protocol=guest_control.PROTOCOL,
+            guest_control_actions=list(guest_control.ACTIONS),
+        )
     markers = any(
         key == "IDARSI_RUN_ID" or key.startswith("IDARSI_HANDOFF")
         for key in os.environ
@@ -201,6 +209,8 @@ def recover_unpublished(store: Store, run_id: str) -> None:
 
 def worker(store: Store, run_id: str, operation_id: str, action: str) -> None:
     """Only the durable gated session may mutate a direct generation."""
+    if action not in ("create", "destroy") + guest_control.ACTIONS:
+        raise RunError("Unsupported mutation worker action")
     with lock(store.directory(run_id) / ".resources.lock"):
         data = store.load(run_id)
         operation = data["operations"][-1]
@@ -208,6 +218,7 @@ def worker(store: Store, run_id: str, operation_id: str, action: str) -> None:
             (data.get("mode") != "direct" and data.get("mutation_protocol") != "sealed-v1")
             or operation["id"] != operation_id
             or operation["action"] != action or operation.get("completion")
+            or operation.get("worker") not in data["workers"]
             or not any(
                 member["session"] == os.getsid(0)
                 for member in members(operation["worker"])
@@ -217,13 +228,21 @@ def worker(store: Store, run_id: str, operation_id: str, action: str) -> None:
         if "admission_protocol" in data:
             admission.cleanup_boundary(store, run_id, operation)
         result = data.get("direct_context")
+        if action in guest_control.ACTIONS:
+            if data.get("mode") != "direct" or result is None:
+                raise RunError("Guest worker requires a direct generation")
+            history = dict(data, operations=data["operations"][:-1])
+            guest_control.target(history, result, data["config"], operation["guest"])
+            outcome = guest_control.execute(store, data, operation)
+            guest_control.seal(store, run_id, operation, outcome)
+            return
         if action == "create":
             instances = Backend(store, data).create(data["config"]["platforms"])
             if result is not None:
                 mapping(result, instances)
             data["instances_ready"] = instances
             store.save(data)
-        else:
+        elif action == "destroy":
             backend = Backend(store, data)
             backend.destroy_guests()
             backend.destroy_network()
@@ -327,22 +346,81 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=(
         "resolve", "init", "create", "destroy", "inspect", "capabilities", "_worker",
+        "recover-network-tail",
+        "_network-tail-worker",
+        *guest_control.ACTIONS,
     ))
     parser.add_argument("worker_args", nargs="*")
     parser.add_argument("--backend", choices=("podman", "kvm"))
     parser.add_argument("--scenario")
     parser.add_argument("--role", default=".")
+    parser.add_argument("--guest")
+    parser.add_argument("--operation")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--producing-source-root")
+    parser.add_argument("--profile")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--plan")
+    parser.add_argument("--accept-profile")
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.action == "_network-tail-worker":
+            if (
+                len(args.worker_args) != 4 or args.backend or args.scenario or args.guest
+                or args.operation or args.dry_run or args.producing_source_root or args.profile
+                or args.apply or args.plan or args.accept_profile
+            ):
+                raise RunError("Invalid private network-tail worker arguments")
+            from . import direct_network_tail_standard
+
+            direct_network_tail_standard.worker(Store.open_existing(), *args.worker_args)
+            return 0
+        if args.action == "recover-network-tail":
+            if (
+                args.backend != "kvm" or not args.scenario or not args.operation
+                or args.dry_run == args.apply or args.guest is not None or args.worker_args
+            ):
+                raise RunError("Network-tail actions require KVM, scenario, operation and exactly one mode")
+            if args.profile is None:
+                if args.apply or args.plan is not None or args.accept_profile is not None:
+                    raise RunError("Default network-tail diagnosis is dry-run only")
+                from . import direct_network_tail
+
+                result = direct_network_tail.inspect(args)
+            else:
+                from . import direct_network_tail_standard, direct_network_tail_runtime
+
+                if args.profile != direct_network_tail_runtime.PROFILE:
+                    raise RunError("Unsupported network-tail profile")
+                if args.dry_run:
+                    if args.plan is not None or args.accept_profile is not None:
+                        raise RunError("Dry-run cannot accept an apply plan or profile")
+                    result = direct_network_tail_standard.inspect(args)
+                else:
+                    result = direct_network_tail_standard.apply(args)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if (
+            args.operation is not None or args.dry_run or args.producing_source_root is not None
+            or args.profile is not None or args.apply or args.plan is not None or args.accept_profile is not None
+        ):
+            raise RunError("Recovery diagnostic options are only valid for recover-network-tail")
         store = Store()
         if args.action == "_worker":
             worker(store, *args.worker_args)
             return 0
         if not args.backend or not args.scenario or args.worker_args:
             raise RunError("--backend and --scenario are required")
+        if args.action in guest_control.ACTIONS:
+            if args.backend != "kvm" or not args.guest:
+                raise RunError("Guest control requires --backend kvm and --guest LOGICAL")
+        elif args.guest is not None:
+            raise RunError("--guest is only valid for guest control")
         result, config = resolved(args, store)
-        if result["mode"] == "supervised":
+        if args.action in guest_control.ACTIONS:
+            result = guest_control.control(args, store, result, config)
+        elif result["mode"] == "supervised":
             if args.action in ("create", "destroy"):
                 lifecycle(store, args.action, result["generation"])
             elif args.action == "inspect":

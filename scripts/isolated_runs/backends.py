@@ -169,6 +169,13 @@ class Backend:
         identity = str(uuid.uuid4())
         name = "itr-" + identity.replace("-", "")[:24]
         network = {"name": name, "id": identity if self.data["backend"] == "kvm" else None}
+        if self.data["backend"] == "kvm":
+            # Published with network intent, before any guest can be defined.
+            # Never synthesize this evidence from a possibly cleared journal.
+            network["domain_ownership"] = {
+                "version": 1, "protocol": "create-intent-v1",
+                "generation": self.data["id"], "domains": [],
+            }
         self.data["network"] = network
         self.save()
         subnet = ipaddress.ip_network(self.data["subnet"])
@@ -290,6 +297,10 @@ class Backend:
                 "disk": None,
             }
             self.data["guests"].append(guest)
+            if self.data["backend"] == "kvm":
+                self.data["network"]["domain_ownership"]["domains"].append({
+                    "id": guest["id"], "name": guest["name"],
+                })
             self.save()
             if self.data["backend"] == "podman":
                 result.append(self.create_container(guest, platform))
@@ -527,6 +538,34 @@ class Backend:
                     raise RunError("Network removal was not confirmed")
         else:
             with lock(self.store.root / ".storage-graph.lock"):
+                ownership = intent.get("domain_ownership")
+                owned_ids, owned_names = set(), set()
+                if ownership is not None:
+                    if (
+                        not isinstance(ownership, dict) or ownership.get("version") != 1
+                        or ownership.get("protocol") != "create-intent-v1"
+                        or ownership.get("generation") != self.data["id"]
+                        or not isinstance(ownership.get("domains"), list)
+                    ):
+                        raise RunError("Invalid original network domain ownership")
+                    for domain in ownership["domains"]:
+                        if (
+                            not isinstance(domain, dict) or set(domain) != {"id", "name"}
+                            or str(uuid.UUID(domain["id"])) != domain["id"]
+                            or not re.fullmatch(r"itr-[a-f0-9]{32}", domain["name"])
+                            or domain["id"] in owned_ids or domain["name"] in owned_names
+                        ):
+                            raise RunError("Ambiguous original network domain ownership")
+                        owned_ids.add(domain["id"])
+                        owned_names.add(domain["name"])
+                    if any(
+                        guest["id"] not in owned_ids or guest["name"] not in owned_names
+                        for guest in self.data.get("guests", [])
+                    ):
+                        raise RunError("Original network ownership does not cover the guest journal")
+                # Historical records without creation-time evidence keep the
+                # strict resolver: absence cannot retroactively prove ownership.
+                allow_dangling = ownership is not None
                 networks = libvirt_networks()
                 matches = [root for root in networks if (
                     root.findtext("uuid") == intent["id"] or root.findtext("name") == intent["name"]
@@ -536,7 +575,26 @@ class Backend:
                         matches[0].findtext("name") != intent["name"]
                     ):
                         raise RunError("Libvirt network was replaced")
-                    assert_network_unused(matches[0], intent, self.data["subnet"], networks)
+                    first = assert_network_unused(
+                        matches[0], intent, self.data["subnet"], networks,
+                        allow_inactive_dangling=allow_dangling,
+                        owned_domain_ids=owned_ids, owned_domain_names=owned_names,
+                        owned_generation_id=self.data["id"],
+                    )
+                    fresh = libvirt_networks()
+                    targets = [root for root in fresh if (
+                        root.findtext("uuid") == intent["id"] or root.findtext("name") == intent["name"]
+                    )]
+                    if len(targets) != 1:
+                        raise RunError("Owned network changed between dependency snapshots")
+                    second = assert_network_unused(
+                        targets[0], intent, self.data["subnet"], fresh,
+                        allow_inactive_dangling=allow_dangling,
+                        owned_domain_ids=owned_ids, owned_domain_names=owned_names,
+                        owned_generation_id=self.data["id"],
+                    )
+                    if first != second:
+                        raise RunError("Network dependencies changed between snapshots")
                     command(VIRSH + ["net-destroy", intent["id"]])
                     if any(root.findtext("uuid") == intent["id"] for root in libvirt_networks()):
                         raise RunError("Network remains defined; not removing a persistent definition")

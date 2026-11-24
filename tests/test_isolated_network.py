@@ -1,6 +1,7 @@
 """Owned bridge teardown guardrails; every backend/kernel query is mocked."""
 
 import copy
+import contextlib
 import ipaddress
 import json
 import unittest
@@ -18,6 +19,11 @@ class NetworkRemovalTests(Fixture):
         super().setUp()
         identity = str(uuid.uuid4())
         self.intent = {"id": identity, "name": "itr-" + identity.replace("-", "")[:24]}
+        self.original_domain = {"id": str(uuid.uuid4()), "name": "itr-" + uuid.uuid4().hex}
+        self.intent["domain_ownership"] = {
+            "version": 1, "protocol": "create-intent-v1",
+            "generation": self.run["id"], "domains": [self.original_domain],
+        }
         self.bridge = "it" + identity.replace("-", "")[:12]
         self.run["network"] = self.intent
         self.store.save(self.run)
@@ -40,6 +46,7 @@ class NetworkRemovalTests(Fixture):
         self.foreign_id = str(uuid.uuid4())
         self.active = {}
         self.persistent = {}
+        self.states = {}
         self.links = [
             {"ifname": self.bridge, "ifindex": 10, "altnames": ["owned-alt"]},
             {"ifname": "otherbr", "ifindex": 20},
@@ -51,6 +58,7 @@ class NetworkRemovalTests(Fixture):
     def domain(self, kind, attributes=None, actual=None):
         root = ET.Element("domain")
         ET.SubElement(root, "uuid").text = self.foreign_id
+        ET.SubElement(root, "name").text = "foreign-domain"
         devices = ET.SubElement(root, "devices")
         interface = ET.SubElement(devices, "interface", type=kind)
         if attributes is not None:
@@ -60,10 +68,18 @@ class NetworkRemovalTests(Fixture):
             ET.SubElement(resolved, "source", actual[1])
         return root
 
-    def readonly(self, argv):
+    def readonly(self, argv, **kwargs):
         self.reads.append(argv)
         if argv[:4] == ["ip", "-j", "link", "show"]:
             return json.dumps(self.links)
+        if "net-list" in argv:
+            return "\n".join(root.findtext("uuid") for root in self.networks)
+        if "net-dumpxml" in argv:
+            identity = argv[argv.index("net-dumpxml") + 1]
+            return ET.tostring(next(root for root in self.networks if root.findtext("uuid") == identity), encoding="unicode")
+        if "domstate" in argv:
+            self.assertEqual(kwargs["env"]["LC_ALL"], "C")
+            return self.states.get(argv[-1], "running" if argv[-1] in self.active else "shut off")
         if "list" in argv:
             if "--persistent" in argv:
                 identities = self.persistent
@@ -186,16 +202,16 @@ class NetworkRemovalTests(Fixture):
     def test_malformed_domain_xml_fails_closed(self):
         self.active[self.foreign_id] = self.domain("bridge", {"bridge": "otherbr"})
         readonly = self.readonly
-        with patch.object(self, "readonly", side_effect=lambda argv: (
-            "<domain>" if "dumpxml" in argv else readonly(argv)
+        with patch.object(self, "readonly", side_effect=lambda argv, **kwargs: (
+            "<domain>" if "dumpxml" in argv else readonly(argv, **kwargs)
         )):
             self.assert_refused()
 
     def test_inconsistent_domain_inventory_fails_closed(self):
         readonly = self.readonly
-        with patch.object(self, "readonly", side_effect=lambda argv: (
+        with patch.object(self, "readonly", side_effect=lambda argv, **kwargs: (
             self.foreign_id if "list" in argv and "--all" in argv and "--persistent" not in argv
-            else readonly(argv)
+            else readonly(argv, **kwargs)
         )):
             self.assert_refused()
 
@@ -206,7 +222,7 @@ class NetworkRemovalTests(Fixture):
         self.assertEqual(len(self.destroyed), 1)
         self.assertIsNone(self.store.load(self.run["id"])["network"])
         xml_queries = [argv for argv in self.reads if "dumpxml" in argv]
-        self.assertEqual(len(xml_queries), 2)
+        self.assertEqual(len(xml_queries), 4)
         self.assertTrue(any("--inactive" in argv for argv in xml_queries))
         self.assertTrue(any("--inactive" not in argv for argv in xml_queries))
 
@@ -214,6 +230,250 @@ class NetworkRemovalTests(Fixture):
         self.execute()
         self.assertEqual(len(self.destroyed), 1)
         self.assertIsNone(self.backend.data["network"])
+
+
+    def test_two_foreign_shutoff_dangling_names_allow_four_distinct_targets(self):
+        for _ in range(4):
+            identity = str(uuid.uuid4())
+            self.intent = {"id": identity, "name": "itr-" + identity.replace("-", "")[:24]}
+            self.intent["domain_ownership"] = {
+                "version": 1, "protocol": "create-intent-v1",
+                "generation": self.run["id"], "domains": [self.original_domain],
+            }
+            self.bridge = "it" + identity.replace("-", "")[:12]
+            self.network.find("name").text = self.intent["name"]
+            self.network.find("uuid").text = identity
+            self.network.find("bridge").set("name", self.bridge)
+            self.network.find("domain").set("name", self.intent["name"] + ".test")
+            self.links[0]["ifname"] = self.bridge
+            self.backend.data["network"] = self.intent
+            self.destroyed.clear()
+            self.persistent.clear()
+            for name in ("missing-network-a", "missing-network-b"):
+                self.foreign_id = str(uuid.uuid4())
+                self.persistent[self.foreign_id] = self.domain("network", {"network": name})
+            self.execute()
+            self.assertEqual(len(self.destroyed), 1)
+
+    def test_dangling_requires_confirmed_shutoff_and_inactive_only(self):
+        for state in ("running", "paused", "in shutdown", "crashed", "unknown", "", "SHUTOFF"):
+            self.persistent[self.foreign_id] = self.domain("network", {"network": "missing"})
+            self.states[self.foreign_id] = state
+            with self.subTest(state=state):
+                self.assert_refused()
+        self.states[self.foreign_id] = "shut off"
+        self.active[self.foreign_id] = self.domain("user")
+        self.assert_refused()
+
+    def test_dangling_strict_source_actual_and_later_interface_guards(self):
+        for attributes in (
+            {"network": "missing", "portgroup": "extra"},
+            {"network": "missing", "bridge": "otherbr"},
+            {"network": "missing", "dev": "otherbr"},
+            {"network": "missing", "unexpected": "extra"},
+            {"network": "bad name"},
+        ):
+            self.persistent[self.foreign_id] = self.domain("network", attributes)
+            self.assert_refused()
+        for child in ("seclabel", "unknown"):
+            root = self.domain("network", {"network": "missing"})
+            ET.SubElement(root.find("./devices/interface/source"), child)
+            self.persistent[self.foreign_id] = root
+            self.assert_refused()
+        self.persistent[self.foreign_id] = self.domain(
+            "network", {"network": "missing"}, ("bridge", {"bridge": "otherbr"}),
+        )
+        self.assert_refused()
+        root = self.domain("network", {"network": "missing"})
+        interface = ET.SubElement(root.find("devices"), "interface", type="bridge")
+        ET.SubElement(interface, "source", bridge=self.bridge)
+        self.persistent[self.foreign_id] = root
+        self.assert_refused()
+
+    def test_dangling_without_explicit_context_and_recovery_opt_in_refused(self):
+        from isolated_runs.network_references import InterfaceReferences, assert_network_unused
+
+        references = InterfaceReferences(self.bridge, self.intent, self.networks, runner=self.readonly)
+        with self.assertRaises(RunError):
+            references.check_domain(self.domain("network", {"network": "missing"}), self.foreign_id)
+        with self.assertRaises(RunError):
+            references.check_domain(
+                self.domain("network", {"network": "missing"}), self.foreign_id,
+                state="shut off", xml_origin="inactive", persistent=True, active=False,
+            )
+        self.persistent[self.foreign_id] = self.domain("network", {"network": "missing"})
+        with self.assertRaises(RunError):
+            assert_network_unused(
+                self.network, self.intent, self.run["subnet"], self.networks,
+                bridge_absent=True, runner=self.readonly,
+            )
+        self.assertFalse(any("domstate" in argv for argv in self.reads))
+
+    def test_known_owned_domain_with_dangling_reference_refused(self):
+        self.persistent[self.foreign_id] = self.domain("network", {"network": "missing"})
+        self.backend.data["guests"] = [{"id": self.foreign_id}]
+        self.assert_refused()
+
+    def test_generation_owned_description_blocks_after_guest_journal_is_cleared(self):
+        root = self.domain("network", {"network": "missing"})
+        ET.SubElement(root, "description").text = "idarsi-run:" + self.run["id"]
+        self.persistent[self.foreign_id] = root
+        self.backend.data["guests"] = []
+        self.assert_refused()
+
+    def test_original_uuid_or_name_blocks_after_guest_journal_clear_without_description(self):
+        for identity in ("uuid", "name"):
+            for description in (None, "idarsi-run:foreign"):
+                self.foreign_id = self.original_domain["id"] if identity == "uuid" else str(uuid.uuid4())
+                root = self.domain("network", {"network": "missing"})
+                root.find("name").text = self.original_domain["name"] if identity == "name" else "foreign"
+                if description is not None:
+                    ET.SubElement(root, "description").text = description
+                self.persistent = {self.foreign_id: root}
+                self.backend.data["guests"] = []
+                with self.subTest(identity=identity, description=description):
+                    self.assert_refused()
+
+    def test_missing_or_invalid_creation_provenance_never_enables_exception(self):
+        self.persistent[self.foreign_id] = self.domain("network", {"network": "missing"})
+        original = copy.deepcopy(self.intent["domain_ownership"])
+        for value in (
+            None, {}, dict(original, protocol="reconstructed"),
+            dict(original, generation=str(uuid.uuid4())),
+            dict(original, domains=[self.original_domain, self.original_domain]),
+        ):
+            if value is None:
+                self.intent.pop("domain_ownership", None)
+            else:
+                self.intent["domain_ownership"] = value
+            self.store.save(self.backend.data)
+            with self.subTest(value=value):
+                self.assert_refused()
+        self.assertNotIn("domstate", [argument for query in self.reads for argument in query])
+
+    def test_missing_or_duplicate_domain_name_cannot_prove_foreign_ownership(self):
+        for duplicate in (False, True):
+            root = self.domain("network", {"network": "missing"})
+            if duplicate:
+                ET.SubElement(root, "name").text = self.original_domain["name"]
+            else:
+                root.remove(root.find("name"))
+            self.persistent[self.foreign_id] = root
+            with self.subTest(duplicate=duplicate):
+                self.assert_refused()
+
+    def test_original_names_and_uuids_persist_before_guest_creation_and_after_removal(self):
+        def create(guest, platform, index):
+            saved = self.store.load(self.run["id"])
+            self.assertIn(
+                {"id": guest["id"], "name": guest["name"]},
+                saved["network"]["domain_ownership"]["domains"],
+            )
+            return {"instance": guest["logical"]}
+
+        with patch.object(self.backend, "network"), patch.object(self.backend, "create_domain", side_effect=create):
+            self.backend.create([{"name": "new-guest"}])
+        before = copy.deepcopy(self.backend.data["network"]["domain_ownership"])
+        with patch.object(self.backend, "check_context"), \
+                patch.object(self.backend, "owned_domain", return_value=None), \
+                patch.object(self.backend.storage, "directory", return_value=contextlib.nullcontext(123)):
+            self.backend.destroy_guests()
+        saved = self.store.load(self.run["id"])
+        self.assertEqual(saved["guests"], [])
+        self.assertEqual(saved["network"]["domain_ownership"], before)
+
+    def test_persistent_network_alias_cannot_hide_behind_unrelated_live_bridge(self):
+        self.persistent[self.foreign_id] = self.domain("network", {"network": "other-network"})
+        readonly = self.readonly
+        defined = copy.deepcopy(self.other_network)
+        defined.find("bridge").set("name", self.bridge)
+        with patch.object(self, "readonly", side_effect=lambda argv, **kwargs: (
+            ET.tostring(defined, encoding="unicode")
+            if "net-dumpxml" in argv and self.other_network.findtext("uuid") in argv
+            else readonly(argv, **kwargs)
+        )):
+            self.assert_refused()
+
+    def test_name_uuid_collision_duplicates_and_missing_bridge_refused(self):
+        for change in ("uuid-only", "collision", "duplicate", "missing-bridge"):
+            original = copy.deepcopy(self.networks)
+            if change == "uuid-only":
+                reference = self.other_network.findtext("uuid")
+            else:
+                reference = "other-network"
+            if change == "collision":
+                self.other_network.find("name").text = self.intent["id"]
+                reference = self.intent["id"]
+            if change == "duplicate":
+                self.networks.append(copy.deepcopy(self.other_network))
+            if change == "missing-bridge":
+                self.other_network.remove(self.other_network.find("bridge"))
+            self.persistent[self.foreign_id] = self.domain("network", {"network": reference})
+            with self.subTest(change=change):
+                self.assert_refused()
+            self.networks = original
+            self.network, self.other_network = self.networks
+
+    def test_both_passes_discover_fresh_links_even_without_domains(self):
+        self.execute()
+        self.assertEqual(sum(argv == ["ip", "-j", "link", "show"] for argv in self.reads), 2)
+
+    def test_foreign_name_uuid_collision_has_multiple_matches_and_denies(self):
+        reference = self.other_network.findtext("uuid")
+        collision = ET.fromstring(
+            "<network><name>" + reference + "</name><uuid>" + str(uuid.uuid4())
+            + "</uuid><bridge name='collisionbr'/></network>",
+        )
+        self.networks.append(collision)
+        self.persistent[self.foreign_id] = self.domain("network", {"network": reference})
+        self.assert_refused()
+
+    def test_incomplete_duplicate_and_malformed_fresh_network_inventory_denies(self):
+        self.persistent[self.foreign_id] = self.domain("network", {"network": "missing"})
+        readonly = self.readonly
+        for output in ("", self.intent["id"], self.intent["id"] + "\n" + self.intent["id"], "bad-uuid"):
+            with self.subTest(output=output), patch.object(self, "readonly", side_effect=lambda argv, **kwargs: (
+                output if "net-list" in argv and "--all" in argv and "--persistent" not in argv
+                else readonly(argv, **kwargs)
+            )):
+                self.assert_refused()
+
+    def test_changes_or_discovery_failure_in_second_pass_refuse(self):
+        for change in ("links", "state", "xml", "network", "network-state", "inventory", "failure"):
+            self.active.clear()
+            self.persistent[self.foreign_id] = self.domain("bridge", {"bridge": "otherbr"})
+            self.states[self.foreign_id] = "shut off"
+            self.reads.clear()
+            readonly = self.readonly
+            links = copy.deepcopy(self.links)
+            network = copy.deepcopy(self.other_network)
+            second_pass = [False]
+
+            def changed(argv, **kwargs):
+                if argv == ["ip", "-j", "link", "show"] and any(
+                    read == argv for read in self.reads
+                ):
+                    second_pass[0] = True
+                    if change == "failure":
+                        raise RunError("snapshot unavailable")
+                    if change == "links":
+                        self.links[1]["ifindex"] = 21
+                    elif change == "state":
+                        self.states[self.foreign_id] = "paused"
+                    elif change == "xml":
+                        ET.SubElement(self.persistent[self.foreign_id], "description").text = "changed"
+                    elif change == "network":
+                        ET.SubElement(self.other_network, "description").text = "changed"
+                    elif change == "inventory":
+                        self.persistent.clear()
+                if second_pass[0] and change == "network-state" and "net-list" in argv and "--all" not in argv:
+                    return ""
+                return readonly(argv, **kwargs)
+
+            with self.subTest(change=change), patch.object(self, "readonly", side_effect=changed):
+                self.assert_refused()
+            self.links = links
+            self.networks[1] = self.other_network = network
 
 
 if __name__ == "__main__":

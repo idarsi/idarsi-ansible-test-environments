@@ -2,6 +2,7 @@
 
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import os
@@ -21,6 +22,7 @@ from isolated_runs.state import RunError, Store
 REAL_CONTEXT = fixtures.REAL_CONTEXT
 REAL_VERIFY = network.verify_absent
 REAL_HELPERS = network.helpers_absent
+REAL_BACKEND_SOURCE = recovery.BACKEND_SOURCE
 PROC_MOUNT = "1 0 0:1 / /proc rw,nosuid,nodev,noexec - proc proc rw\n"
 
 
@@ -484,7 +486,10 @@ class ExecutingContextTests(unittest.TestCase):
         self.site = self.prefix / "lib/python3.12/site-packages"
         self.site.mkdir(parents=True)
         modules = {}
-        backend_source = (Path(recovery.__file__).parent / "backends.py").read_bytes()
+        # Package/controller tests use a deterministic synthetic source profile,
+        # not today's backend bytes as evidence for a frozen legacy approval.
+        backend_source = b"# synthetic backend profile fixture; never executed\n"
+        self.backend_digest = hashlib.sha256(backend_source).hexdigest()
         for name in (
             "recovery", "recovery_host", "recovery_system", "recovery_commands", "recovery_routes",
             "network_recovery", "network_references",
@@ -503,6 +508,7 @@ class ExecutingContextTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         patch.dict(sys.modules, modules).start()
         patch.object(recovery, "REPO", self.root).start()
+        patch.object(recovery, "BACKEND_SOURCE", self.backend_digest).start()
         patch.object(sys, "prefix", str(self.prefix)).start()
         patch.object(sys, "executable", str(self.executable)).start()
         patch.object(sys, "version_info", (3, 12, 0)).start()
@@ -533,7 +539,7 @@ class ExecutingContextTests(unittest.TestCase):
         self.assertEqual(result["prefix"], str(self.prefix))
         self.assertEqual(result["executable"], str(self.executable))
         self.assertEqual(result["interpreter_target"], str(self.target))
-        self.assertEqual(result["sources"]["backends"], recovery.BACKEND_SOURCE)
+        self.assertEqual(result["sources"]["backends"], self.backend_digest)
         self.target.write_text("# replacement fixture interpreter\n")
         self.assertNotEqual(result["interpreter_sha256"], recovery.executing_context()["interpreter_sha256"])
 
@@ -573,6 +579,14 @@ class ExecutingContextTests(unittest.TestCase):
         (self.root / "scripts/isolated_runs/backends.py").write_text("# unknown cleanup semantics\n")
         with self.assertRaisesRegex(RunError, "unsupported_original_source_profile"):
             recovery.executing_context()
+
+    def test_real_legacy_profile_still_rejects_synthetic_source_before_tooling_checks(self):
+        self.assertNotEqual(self.backend_digest, REAL_BACKEND_SOURCE)
+        with patch.object(recovery, "BACKEND_SOURCE", REAL_BACKEND_SOURCE):
+            with self.assertRaisesRegex(RunError, "unsupported_original_source_profile"):
+                recovery.executing_context()
+            self.distribution.assert_not_called()
+        self.assertEqual(recovery.executing_context()["sources"]["backends"], self.backend_digest)
 
     def test_wrong_tooling_versions_or_import_location_refuse(self):
         for version, location in (("0", self.site), ("26.8.0", self.root)):

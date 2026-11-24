@@ -214,11 +214,78 @@ scripts/scenario-context capabilities --backend podman --scenario podman-validat
 scripts/scenario-context resolve --backend podman --scenario podman-validation --role /path/to/role
 ```
 
-Actions are `capabilities`, `resolve`, `init`, `inspect`, `create`, and `destroy`.
+Actions are `capabilities`, `resolve`, `init`, `inspect`, `create`, and `destroy`,
+plus the KVM-only owned guest controls described below.
 `--backend` and `--scenario` are required; `--role` defaults to the current
 directory. Success writes one JSON object to stdout; errors exit 1, write a
 diagnostic to stderr, and emit no success object. Internal `_worker` is not
 public API.
+
+### Owned KVM guest power control
+
+KVM `capabilities` and `resolve` advertise
+`guest_control_protocol: owned-kvm-v1` and
+`guest_control_actions: [guest-stop, guest-start]`. Callers must require this
+protocol before using these actions; older helpers reject them. Neither raw
+`virsh` nor inferred domain names are a compatible fallback.
+
+```bash
+scripts/scenario-context guest-stop --backend kvm --scenario kvm-example --role /path/to/role --guest database
+scripts/scenario-context guest-start --backend kvm --scenario kvm-example --role /path/to/role --guest database
+```
+
+`--guest` is the exact configured logical platform name and is valid only for
+these actions. Stop is abrupt poweroff, not shutdown or removal. Start boots
+the same persistent domain; it never defines a replacement. Disks, mappings,
+network, generation and allocation remain intact. Results retain the context
+schema and identity fields, adding `action`, `guest`, `operation` (UUID),
+`changed` (boolean) and `state` (`shut-off` or `running`).
+
+Both direct and supervised invocations require an existing unchanged generation
+with a successfully sealed create and no incomplete mutation. The helper
+compares effective configuration after normalizing only Molecule's ephemeral
+root relocation from the supervisor's temporary config parse; the actual
+current root is independently bound to the generation. All other configuration
+and effective-environment fields remain compared.
+Standalone path values relocate only when rooted at that exact ephemeral
+directory, not when the root appears inside a foreign path or suffix collision.
+Paths containing a native Linux `..` component remain literal, including nested
+or internally cancelling traversals; normalization never resolves filesystem paths.
+For explicit shell dependency commands, only the `--ephemeral-directory` and
+`--molecule-file` argument paths relocate; simple single/double/plain quoting
+and space-containing roots are supported without changing any other command
+text. Unsupported escaped/compound argument forms stay literal and cannot
+silently broaden configuration equivalence.
+It validates unique logical ownership, exact domain UUID/name/description in both
+live and persistent definitions, the owned network and interface, complete disk
+attachments and recorded inode/backing-chain evidence. Running images are not
+opened for header inspection: complete live XML must agree with the original
+authorized chain. Inactive image headers are freshly compared with that chain,
+never adopted as a new baseline. Extra storage, changed graphs, foreign
+consumers, ambiguous queries and unsupported power states fail closed.
+Managed-save state (or uncertainty about it) is refused before power mutation;
+the helper never restores, removes or bypasses a saved-state image. Unsupported
+device classes, including filesystem exports, host devices and NVRAM, are
+refused in either domain definition. Every interface source and any resolved
+`actual` source must agree with the owned network and bridge; ambiguous,
+contradictory or unsupported source evidence is refused.
+Already-running starts and already-off stops are validated no-ops, not bypasses.
+
+Direct operations use the context/supervisor locks and a gated journalled worker;
+supervised operations use the admitted current session and recheck the open
+admission gate immediately before persisting intent. Resource and storage-graph
+locks serialize validation and bounded exact-UUID backend operations. Only
+successful postchecks receive a durable completion seal. Timeout, cancellation,
+query failure or failed persistence leaves an incomplete mutation and retains
+resources and lease; no automatic retry, restart or recovery authority is added.
+Normal cleanup accepts fully validated completed guest operations, but refuses
+incomplete ones even when the domain currently appears stopped or absent.
+
+The VM-free regressions are `tests/test_isolated_guest_control.py`; they use
+private temporary state and mocked backend boundaries. They do not establish
+real KVM fault injection, runtime concurrency or interruption acceptance.
+
+### Lifecycle context identity
 
 There is no “legacy unsupported” success classification or fallback exit code:
 nonzero capability results are errors, never permission to downgrade to a
@@ -625,6 +692,233 @@ treated as permission to destroy a bridge.
 
 ## State, cancellation and recovery
 
+### Forward normal-network cleanup and inactive dangling references
+
+Normal owned-network cleanup has one narrow unresolved-reference exception:
+explicit inactive XML of a confirmed persistent, non-active foreign domain
+whose C-locale `domstate` is exactly `shut off`, with a name-only
+`<source network='...'>`, no source children/extra attributes and no `actual`
+anywhere in the domain. The name must differ from the validated target
+name/UUID and have zero name **and** UUID matches in a complete fresh network
+inventory. Known owned-domain identities and generation ownership descriptions
+remain ineligible, including after the guest journal has been cleared.
+For new generations, `network.domain_ownership` is initialized with network
+intent and durably accumulates every guest's original UUID **and name** before
+domain creation. Guest removal never clears this evidence; both dependency
+snapshots exclude either original identity independently of current descriptions.
+The evidence is versioned, generation-bound and checked for ambiguity.
+Historical manifests lacking creation-time evidence retain strict unresolved
+reference refusal: cleanup never reconstructs or backfills an empty guest list.
+Missing or duplicate domain names cannot prove foreign ownership.
+Libvirt resolves this source by name; UUID matches are conservative collision
+guards, not an alternative lookup rule. All later interfaces are still checked.
+Active domains' inactive XML, unknown/paused/transitional states, missing
+context, ambiguous or malformed inventories and resolved networks lacking an
+unambiguous bridge deny.
+
+Before normal `net-destroy`, two independent full read-only snapshots must agree:
+domain/network inventories, active/persistent membership, exact domain states,
+live/persistent XML, target configuration and fresh kernel-link facts. Failure
+or change denies destruction. The supported host baseline remains native
+distribution libvirt on Rocky Linux 10 and Fedora 43/44 (no alternate repository
+or tool upgrade): it must provide plain `virsh domstate`, UUID list filters and
+inactive domain/network XML, as documented by the
+[upstream virsh manual](https://www.libvirt.org/manpages/virsh.html#domstate).
+The helper uses `LC_ALL=C` and does not depend on `domstate --reason`.
+Unsupported commands fail closed; host-lane runtime verification remains
+tester-owned.
+
+The shared graph lock coordinates cooperating helpers only. Two snapshots are
+not an atomic libvirt transaction: trusted external administrators must keep
+domain/network definitions and host links quiescent across discovery and
+destruction. This is not sandboxing or protection against malicious same-UID
+actors. Recovery callers do **not** opt into this exception; incomplete-operation
+guards and recovery policy are unchanged. These source fixes authorize no
+historical retry and claim no cleanup of retained resources.
+
+### Existing inspection and recovery commands
+
+#### Read-only direct network-tail diagnosis
+
+The default direct diagnostic is deliberately refusal-only:
+
+```bash
+MOLECULE_EPHEMERAL_DIRECTORY=/path/to/current/ephemeral \
+  scripts/scenario-context recover-network-tail --backend kvm \
+  --scenario kvm-example --role /path/to/role \
+  --operation ORIGINAL_DESTROY_OPERATION_UUID --dry-run
+```
+
+Use the actual existing direct ephemeral binding, not an invented directory.
+The helper opens existing state and locks only. It does not initialize state,
+run Molecule configuration, register or signal workers, query backends, create a
+plan, or write an audit record. Missing/unsafe pointers, locks, bindings,
+unsupported journals and supervised handoffs produce a bounded `eligible: false`
+diagnostic. No `--apply`, `--force`, profile acceptance or mutation path is
+available under this default contract.
+
+The optional `--producing-source-root /path/to/approved/producing/source`
+locates **bytes only**. The reader verifies exactly 13 fixed relative paths,
+lengths and SHA-256 fingerprints against the embedded reviewed composite
+`4f4af9b019ca41ea238b3c581ed8e6b80ab89eba97a27a556189fa9a790642c0`.
+The root, descendants and files are descriptor-bound and no-follow;
+unsafe ownership/permissions, links, nonregular files, changed bytes or unstable
+reads block verification. Only the approved root-owned sticky `/tmp` ancestor
+for the `/tmp/opencode` subtree is exempted from the ordinary non-writable
+ancestor rule. The subtree itself must remain UID-owned and not group/world
+writable. Nothing from the snapshot is executed, imported or used as
+configuration. The location is not historical execution attribution, target
+identity or digest authority. No default location or environment fallback
+exists; a missing/unavailable source is explicitly reported, and public output
+does not disclose its root path.
+
+Successful byte verification still grants no eligibility. The historical
+checkpoint profile and terminal-check contract are not enabled by this option.
+Required independent forensic runtime, firewall and network-helper qualification
+is unavailable under the default contract, so that diagnostic reports
+`runtime_visibility_unavailable`, `firewall_visibility_unavailable` and
+`helper_visibility_unavailable`, explicitly labelled as unavailable required
+measurements, **not** a live permission probe or an absence assertion. No plan
+digest, profile acceptance or apply route is exposed by the default diagnostic
+or by source-byte verification alone.
+
+When the exact final incomplete destroy and recorded empty guest checkpoint are
+validated, but the original resource identity ledger is unavailable, the result
+includes:
+
+```json
+{
+  "eligible": false,
+  "blockers": ["original_resource_identity_ledger_unavailable"],
+  "network_only_scope_insufficient_for_terminal_cleanup": true,
+  "apply_authorized": false,
+  "lease_release_authorized": false,
+  "audit_written": false
+}
+```
+
+Audited producing-source ordering can support the *historical* interpretation
+that a durable `guests: []` checkpoint followed completed guest/disk removal,
+conditional on explicit source attribution. It does not identify the original
+resources or freshly measure their absence. This default diagnostic accepts no
+replacement proof contract and claims no terminal cleanup. Acceptance logs,
+stale instance mappings and copied manifests are not adoption authority; no
+historical ownership is reconstructed or backfilled. Neither reboot nor blind
+ordinary destroy retry repairs missing proof. The original operation, context
+pointer, network intent and lease remain unchanged. The separately reviewed
+opt-in standard profile below changes that historical-proof contract explicitly.
+Pure draft history/binding functions for
+`direct-empty-checkpoint-network-tail-v1` are intentionally disconnected from
+CLI eligibility: they require exactly one sealed create, then sealed guest
+controls, then the sole incomplete destroy, and preserve exact JSON type/content
+bindings. They never grant eligibility alone; the separate standard profile below
+supplies its explicitly narrower runtime and settlement contract.
+
+#### Opt-in standard-libvirt network-tail reconciliation
+
+`direct-standard-libvirt-network-tail-v1` is a separate, rootless trust contract,
+not a relaxation of the default forensic diagnostic or ordinary destroy:
+
+```bash
+MOLECULE_EPHEMERAL_DIRECTORY=/path/to/current/ephemeral \
+  scripts/scenario-context recover-network-tail --backend kvm \
+  --scenario kvm-example --role /path/to/role \
+  --operation ORIGINAL_DESTROY_OPERATION_UUID --dry-run \
+  --profile direct-standard-libvirt-network-tail-v1 \
+  --producing-source-root /path/to/approved/producing/source
+```
+
+Activate an existing approved controller and its actual
+`VIRTUAL_ENV`/`IDARSI_TEST_ENVIRONMENT` bindings first. The profile currently
+requires Fedora 44's installed `libvirt-daemon-driver-network` build
+`12.0.0-3.fc44`, source RPM `libvirt-12.0.0-3.fc44.src.rpm`. It measures installed
+daemon/driver digests, version, service properties, PID/birth, fixed tools,
+current controller/interpreter/helper sources, and the separately approved
+producing-byte subset. Installed bytes are **not** loaded-image attestation.
+There is no sudo, privileged collector, hook/config parser or forensic fallback.
+The service must use the RPM-matching packaged `virtnetworkd.service` fragment.
+The sole permitted drop-in is Fedora's exact
+`/usr/lib/systemd/system/service.d/10-timeout-abort.conf`, owned by the reviewed
+`systemd` build `259.8-1.fc44` with matching source RPM, RPM SHA-256 inventory,
+596-byte content and fixed digest
+`ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37`.
+The file is opened no-follow, root-owned/non-writable and checked stable;
+`TimeoutStopFailureMode=abort` must also be the effective service property.
+Its package/content/effective-property receipt is bound into the runtime plan.
+Unknown, additional, altered or unreadable drop-ins refuse qualification.
+No drop-ins is supported only with effective `TimeoutStopFailureMode=terminate`.
+The single known `$VIRTNETWORKD_ARGS` representation is allowed
+only with a pidfd-pinned, birth-rechecked read of actual `/proc/PID/cmdline`:
+exact daemon argv, optionally `--timeout 120` or `--timeout=120`. No other
+variable, expansion, option or configuration path is accepted. Unreadable,
+truncated, oversized or changing argv remains unknown and blocks qualification;
+environment files are neither parsed nor presumed empty.
+
+Eligibility requires the exact existing direct context/pointer and original
+history: one sealed create, only strictly sealed guest controls afterward, and
+the final sole incomplete destroy. It accepts the durable empty guest checkpoint
+as *historical* removal evidence conditional on explicit cooperative source
+attribution—not fresh absence of original identities, log adoption or ownership
+backfill. Every old recorded writer/session must be gone in the same boot, with
+complete procfs visibility and no ambiguous PID reuse. Current generated network
+XML and two fresh complete domain/network/kernel snapshots must agree. Only a
+matching active transient generated network, or its independently verified
+absence, is eligible; persistent/replaced/foreign-dependent networks refuse.
+The narrow bare inactive foreign dangling-reference rule is separately applied
+under this contract without manufacturing the missing old ownership ledger.
+For comparison only, address `valid_life_time`/`preferred_life_time` accept
+validated uint32 seconds or literal `forever` (`4294967295` has the same infinite
+meaning). Positive finite counters may count down; increases, finite/infinite
+changes and transitions through zero refuse. Preferred lifetime cannot exceed
+valid lifetime, and partial/malformed lifetime pairs refuse. Only these numeric
+countdowns are normalized: raw observations remain unchanged, while address,
+prefix, scope, flags/deprecation, interface/name/master, inventory, route, link
+and all other field changes still refuse. Unknown fields are never discarded.
+No retry or sleep bypasses the two-snapshot guard.
+
+A dry-run never writes state, registers/signals workers or mutates the backend.
+`eligible: true` is **not** apply authorization. Review the exact plan digest,
+target, observations, claims and assumptions, then obtain separate explicit
+operator approval before invoking any apply. Source root identity is privately
+bound into the plan, not published as a location. Apply requires the same
+arguments with `--apply`, `--plan APPROVED_SHA256`, and
+`--accept-profile direct-standard-libvirt-network-tail-v1`; dry-run rejects apply
+acceptance options, and default/no-profile apply is rejected.
+
+The accepted assumptions explicitly trust the standard running packaged
+libvirt driver to perform its normal firewall/helper teardown, just as ordinary
+backend cleanup does. They also exclude detaching hooks, untracked writers,
+external automation/recreation, historical UUID/name/bridge reuse and filtered
+host views. These are operator-accepted assumptions, not hidden measurements.
+The resulting claim is `normal-libvirt-api-teardown-reconciliation` with
+`original_destroy_completed: false`, independent firewall/helper verification
+`unverified`, and loaded-image attestation `unverified`. It claims neither
+universal host cleanup nor generic RPC draining.
+
+Apply requalifies the exact plan before writing additive recovery intent. A
+gated measured-interpreter worker is journalled before it may run; its sole
+mutation grammar is synchronous `net-destroy` of the exact UUID—never guest,
+disk, foreign-network, define/undefine, firewall or service mutation. It repeats
+source/controller/runtime/writer/target proofs and fresh dependency snapshots.
+The parent must actually observe successful child exit and independently prove
+all recorded sessions empty plus fresh API UUID/name absence and kernel
+bridge/address/subnet-route absence. A durable parent settlement receipt precedes
+allocator-last terminal publication. The original incomplete operation and its
+missing seal remain untouched; stale mappings are cleared only at terminal
+settlement.
+
+Timeout, query/mutation uncertainty, source/runtime/plan drift or failed
+settlement persistence retains the nonterminal record and does not automatically
+retry or signal anything. Intent/worker-only receipts require operator review;
+they cannot be adopted as parent success. An uncertain terminal replace/fsync
+reports `terminal_commit_unconfirmed`,
+`allocator_may_already_be_released: true`, and `fresh_inspection_required: true`,
+without speculative rollback. Explicit reconfirmation requires current proofs
+again, not trust in a saved absence receipt. Terminal reconfirmation never
+revives a cleaned generation.
+
+#### General supervised commands
+
 ```bash
 scripts/test-run list
 scripts/test-run inspect RUN_ID
@@ -735,6 +1029,69 @@ The corresponding backend-free record includes 159 passing Python tests and a
 passing earlier shell-check run; the affected overlay-cleanup fixture passed
 separately after its mock repair. Dependency-pin
 validation remains a separate requirement and is not implied by runtime success.
+
+### Recorded guest-control and network-tail acceptance
+
+On 2026-11-23, direct guest-control checks passed but final network cleanup was
+blocked by foreign domains referencing an absent network. On 2026-11-24, the
+tester recorded the following subsequent, separately scoped results:
+
+| Mode / generation | Observed result |
+| --- | --- |
+| Approved rootless reconciliation / `a95147c2-8114-4cd9-9f88-f0faf3a49c73` | Standard-libvirt reconciliation passed and released the allocation. The original destroy remains unsealed and its history is preserved; this is not an ordinary destroy pass or independent firewall/helper attestation. |
+| Fresh direct `kvm-forward` / `c109cc44-ee1a-4578-b910-d9cb416285af` | Molecule create/verify/destroy passed; ordinary cleanup was sealed and cleaned, with creation-time ownership provenance. |
+| Fresh supervised `kvm-supervised-control` / `95f5eef2-ad1f-4332-b029-eefb2f864c35` | `test-run run --backend kvm` passed the full implemented standard sequence, stop/start, SSH and 1 GiB data-disk checks. Cleanup was sealed and cleaned; all recorded sessions were empty. |
+
+The existing current controller used Python 3.12.16, Ansible Core 2.20.8 and
+Molecule 26.8.0 with an existing Rocky Linux 9 qcow2 image. No image
+build/download, sudo or dependency installation was needed. The tested source
+was `9c2cabe6430439035c322efdaf93754e4da1a5cf` **plus uncommitted helper changes**,
+before this documentation update—not a subsequently created commit.
+Recorded code SHA-256 fingerprints were:
+
+| Relative source | Tested SHA-256 |
+| --- | --- |
+| `scripts/isolated_runs/guest_control.py` | `1819e9607868b9a6f346aad3fdcf476a949ecb827bb0052505dfdd872e59176d` |
+| `scripts/isolated_runs/backends.py` | `28aad734ea07457021b05a8877a1519b96cc6ba3d6e2f353618e239dbf760c93` |
+| `scripts/isolated_runs/network_references.py` | `bc47dbd4aa0007ea30bea51cb115bffdb013f97641da9ae736f8661a21b34d7e` |
+
+Portable invocation shapes, with the existing current controller activated:
+
+```bash
+# From the fixture role:
+molecule create -s kvm-forward
+molecule verify -s kvm-forward
+molecule destroy -s kvm-forward
+
+# From this helper checkout:
+scripts/test-run run --backend kvm --scenario kvm-supervised-control /path/to/fixture-role
+```
+
+Reconciliation used the separately approved
+[standard-libvirt profile](#opt-in-standard-libvirt-network-tail-reconciliation),
+not a blind destroy retry. These results establish only the bounded helper
+scope above. Host-mutation interruption/cancellation, broader OS/controller
+coverage, GUI sessions and PostgreSQL role acceptance remain unverified by
+this record. Raw runtime artifacts and fixture keys are not repository content.
+
+### Quoted dependency hard-failure acceptance
+
+On 2026-11-24, the tester recorded exit 0 for PostgreSQL
+`kvm-hard-patroni-failure` with Core 2.20.8, Molecule 26.8.0 and three ephemeral
+Rocky Linux 9 guests installed from an existing ISO.
+
+| Generation | Observed result |
+| --- | --- |
+| `bc20d375-46a0-454e-b4fa-718dad6fff91` | Create/prepare/converge/idempotence (all `changed=0` on the idempotence pass)/verify/destroy passed. Leader `pg01` was abruptly stopped (`changed=true`, `shut-off`), and `pg03` was promoted. Restart returned `changed=true`, `running` for the same domain UUID `d2e1f3db-1947-4552-963b-cde5d8efcd4e`; the old leader rejoined as a replica. Before/after SQL markers were verified. Create/stop/start/destroy were sealed, the generation was authoritatively cleaned and all eight sessions were gone. No force, recovery or sudo was used. |
+
+Tested helper source was `f9f0b7bd1af671035eb5e6fb5959826392acac4f`
+**plus the uncommitted normalizer fix**; `guest_control.py` SHA-256 was
+`c948843e33dfb78d6eae6328bbaac65fe91a2e7dffd8ea4f6a081c6720f4c998`.
+Tested role source was `45f3547` plus uncommitted role changes. This evidence
+precedes this documentation/follow-up commit; it does not claim execution at a
+later commit, broader role/OS/GUI coverage or host-mutation cancellation safety.
+The historical producing-source qualification and rootless reconciliation
+profile remain unchanged; no snapshot fingerprints were updated for this fix.
 
 Cheap unit checks:
 
