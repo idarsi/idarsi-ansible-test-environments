@@ -178,6 +178,20 @@ Additional review regressions compare two real installed Molecule config parses
 state, filesystem/host-device exports and contradictory or ambiguous interface
 sources in either XML definition. The real backend attachment guard is exercised
 for changed bus, serial, format and extra disks.
+The quoted-dependency regression also performs real supervisor-planning and
+execution parses with space-containing ephemeral roots and the explicit shell
+dependency command template. It covers command/environment fields together,
+rejecting prefix collisions, foreign roots and unrelated context changes.
+Standalone and both explicit dependency arguments also retain traversal-bearing
+paths literally, including nested or internally cancelling `..` components.
+Single/double/plain token tests preserve command spelling; unsupported escaped
+forms stay literal rather than being reinterpreted. This is configuration-only
+unit coverage. Separately, on 2026-11-24 the tester's three-guest PostgreSQL
+`kvm-hard-patroni-failure` lifecycle passed with exit 0, including real leader
+poweroff, promotion, same-domain restart, replica rejoin and SQL markers.
+All four operations were sealed, the generation was cleaned and all eight
+sessions were gone. The tested helper was `f9f0b7b` plus the uncommitted normalizer
+fix, not a later follow-up commit; see the [qualified runtime evidence](docs/isolated-test-runs.md#quoted-dependency-hard-failure-acceptance).
 
 `python3 -m unittest discover -s tests -p 'test_isolated_context.py' -v`
 checks incomplete-operation refusal even with empty sessions, sealed-session

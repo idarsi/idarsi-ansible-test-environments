@@ -247,6 +247,15 @@ compares effective configuration after normalizing only Molecule's ephemeral
 root relocation from the supervisor's temporary config parse; the actual
 current root is independently bound to the generation. All other configuration
 and effective-environment fields remain compared.
+Standalone path values relocate only when rooted at that exact ephemeral
+directory, not when the root appears inside a foreign path or suffix collision.
+Paths containing a native Linux `..` component remain literal, including nested
+or internally cancelling traversals; normalization never resolves filesystem paths.
+For explicit shell dependency commands, only the `--ephemeral-directory` and
+`--molecule-file` argument paths relocate; simple single/double/plain quoting
+and space-containing roots are supported without changing any other command
+text. Unsupported escaped/compound argument forms stay literal and cannot
+silently broaden configuration equivalence.
 It validates unique logical ownership, exact domain UUID/name/description in both
 live and persistent definitions, the owned network and interface, complete disk
 attachments and recorded inode/backing-chain evidence. Running images are not
@@ -1064,6 +1073,25 @@ not a blind destroy retry. These results establish only the bounded helper
 scope above. Host-mutation interruption/cancellation, broader OS/controller
 coverage, GUI sessions and PostgreSQL role acceptance remain unverified by
 this record. Raw runtime artifacts and fixture keys are not repository content.
+
+### Quoted dependency hard-failure acceptance
+
+On 2026-11-24, the tester recorded exit 0 for PostgreSQL
+`kvm-hard-patroni-failure` with Core 2.20.8, Molecule 26.8.0 and three ephemeral
+Rocky Linux 9 guests installed from an existing ISO.
+
+| Generation | Observed result |
+| --- | --- |
+| `bc20d375-46a0-454e-b4fa-718dad6fff91` | Create/prepare/converge/idempotence (all `changed=0` on the idempotence pass)/verify/destroy passed. Leader `pg01` was abruptly stopped (`changed=true`, `shut-off`), and `pg03` was promoted. Restart returned `changed=true`, `running` for the same domain UUID `d2e1f3db-1947-4552-963b-cde5d8efcd4e`; the old leader rejoined as a replica. Before/after SQL markers were verified. Create/stop/start/destroy were sealed, the generation was authoritatively cleaned and all eight sessions were gone. No force, recovery or sudo was used. |
+
+Tested helper source was `f9f0b7bd1af671035eb5e6fb5959826392acac4f`
+**plus the uncommitted normalizer fix**; `guest_control.py` SHA-256 was
+`c948843e33dfb78d6eae6328bbaac65fe91a2e7dffd8ea4f6a081c6720f4c998`.
+Tested role source was `45f3547` plus uncommitted role changes. This evidence
+precedes this documentation/follow-up commit; it does not claim execution at a
+later commit, broader role/OS/GUI coverage or host-mutation cancellation safety.
+The historical producing-source qualification and rootless reconciliation
+profile remain unchanged; no snapshot fingerprints were updated for this fix.
 
 Cheap unit checks:
 

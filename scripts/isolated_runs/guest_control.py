@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import re
+import shlex
 import sys
 import uuid
 import xml.etree.ElementTree as ET
@@ -30,15 +31,67 @@ def comparable_configuration(config: dict) -> dict:
     ephemeral = config.get("_idarsi_effective_ephemeral")
     if not isinstance(ephemeral, str) or not Path(ephemeral).is_absolute():
         return config
-    pattern = re.compile(re.escape(ephemeral) + r"(?=/|$)")
+    def path_value(value):
+        # Lexical containment only: never adopt or resolve filesystem objects.
+        # Even an internally cancelling traversal may refer outside the root.
+        if ".." in value.split("/"):
+            return value
+        if value == ephemeral or value.startswith(ephemeral + "/"):
+            # Configs originate as JSON: a typed tuple cannot collide with a
+            # caller's literal placeholder string or list/dict value.
+            return ("idarsi.ephemeral-path/v1", value[len(ephemeral):])
+        return value
 
-    def normalize(value):
+    def dependency_command(value):
+        # Preserve the command's spelling/quoting and every unrelated argument.
+        # Only the role's explicit path arguments are relocation fields. Simple
+        # quoted tokens support spaces; escapes/unsupported forms stay literal.
+        token_pattern = re.compile(r"""(?:[^\s"'\\]+|"[^"\\]*"|'[^']*')+""")
+        matches = list(token_pattern.finditer(value))
+        position, tokens = 0, []
+        for match in matches:
+            if value[position:match.start()].strip():
+                return value
+            parsed = shlex.split(match.group(), posix=True)
+            if len(parsed) != 1:
+                return value
+            tokens.append(parsed[0])
+            position = match.end()
+        if value[position:].strip():
+            return value
+        replacements = []
+        for index, option in enumerate(tokens[:-1]):
+            if option not in ("--ephemeral-directory", "--molecule-file"):
+                continue
+            raw, decoded = matches[index + 1].group(), tokens[index + 1]
+            normalized = path_value(decoded)
+            if normalized == decoded:
+                continue
+            if raw == decoded:
+                start, end = matches[index + 1].start(), matches[index + 1].end()
+            elif raw in ('"' + decoded + '"', "'" + decoded + "'"):
+                start, end = matches[index + 1].start() + 1, matches[index + 1].end() - 1
+            else:
+                return value
+            replacements.append((start, end, normalized))
+        if not replacements:
+            return value
+        parts, position = [], 0
+        for start, end, replacement in replacements:
+            parts.extend((value[position:start], replacement))
+            position = end
+        parts.append(value[position:])
+        return ("idarsi.dependency-command/v1", tuple(parts))
+
+    def normalize(value, location=()):
         if isinstance(value, str):
-            return pattern.sub("<MOLECULE_EPHEMERAL>", value)
+            if location == ("dependency", "command"):
+                return dependency_command(value)
+            return path_value(value)
         if isinstance(value, list):
-            return [normalize(item) for item in value]
+            return [normalize(item, location + (index,)) for index, item in enumerate(value)]
         if isinstance(value, dict):
-            return {key: normalize(item) for key, item in value.items()}
+            return {key: normalize(item, location + (key,)) for key, item in value.items()}
         return value
 
     return normalize(config)

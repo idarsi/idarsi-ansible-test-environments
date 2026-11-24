@@ -103,6 +103,72 @@ class GuestControlTests(unittest.TestCase):
         with self.assertRaises(RunError):
             guest_control.target(self.data, self.result, changed, "database")
 
+    @unittest.skipUnless(importlib.util.find_spec("molecule"), "Activate existing pinned Molecule")
+    def test_real_quoted_dependency_command_relocates_only_ephemeral_arguments(self):
+        source = self.root / "molecule" / self.data["scenario"] / "molecule.yml"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            (context.REPO / "examples/molecule-managed-kvm/molecule.yml").read_text().replace(
+                'name: "node"', 'name: "database"',
+            ) + """
+dependency:
+  name: shell
+  env:
+    KEEP_CONTEXT: unchanged
+  command: >-
+    python3 "${MOLECULE_PROJECT_DIRECTORY}/tests/dependency.py"
+    --scenario-directory "${MOLECULE_SCENARIO_DIRECTORY}"
+    --ephemeral-directory "${MOLECULE_EPHEMERAL_DIRECTORY}"
+    --molecule-file "${MOLECULE_FILE}"
+    --env-file "${MOLECULE_ENV_FILE}"
+    --helper-directory "${IDARSI_TEST_ENVIRONMENT}"
+""",
+        )
+        actual = self.root / "execution root with spaces" / "ephemeral"
+        planning = self.root / "planning root with spaces"
+        planning.mkdir()
+        self.result["ephemeral_directory"] = str(actual)
+        environment = dict(
+            os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+            HOME=str(self.root), IDARSI_TEST_ENVIRONMENT=str(context.REPO),
+            MOLECULE_EPHEMERAL_DIRECTORY=str(actual),
+        )
+        temporary_directory = tempfile.TemporaryDirectory
+        with patch.object(cli.tempfile, "TemporaryDirectory", side_effect=lambda **kwargs: temporary_directory(
+            dir=planning, **kwargs,
+        )):
+            original = cli.parse_configuration(self.root, self.data["scenario"], environment)
+            current = cli.parse_configuration(self.root, self.data["scenario"], environment, direct=True)
+        original_root = original["_idarsi_effective_ephemeral"]
+        self.assertIn("planning root with spaces", original_root)
+        self.assertIn('--ephemeral-directory "' + original_root + '"', original["dependency"]["command"])
+        self.assertIn('--ephemeral-directory "' + str(actual) + '"', current["dependency"]["command"])
+        self.assertNotEqual(original["_idarsi_effective_env"], current["_idarsi_effective_env"])
+        self.assertEqual(
+            guest_control.comparable_configuration(original), guest_control.comparable_configuration(current),
+        )
+        self.data["config"] = original
+        self.assertEqual(guest_control.target(self.data, self.result, current, "database"), self.guest)
+        for old, new in (
+            ('--ephemeral-directory "' + str(actual) + '"', '--ephemeral-directory "' + str(actual) + '-foreign"'),
+            ('--ephemeral-directory "' + str(actual) + '"', '--ephemeral-directory "/foreign' + str(actual) + '"'),
+            ('--scenario-directory "', '--scenario-directory "/foreign'),
+            ('--env-file "', '--env-file "/foreign'),
+        ):
+            changed = copy.deepcopy(current)
+            changed["dependency"]["command"] = changed["dependency"]["command"].replace(old, new)
+            with self.subTest(change=new), self.assertRaises(RunError):
+                guest_control.target(self.data, self.result, changed, "database")
+        for key in ("KEEP_CONTEXT", "NEW_CONTEXT"):
+            changed = copy.deepcopy(current)
+            changed["dependency"]["env"][key] = "changed"
+            with self.subTest(env=key), self.assertRaises(RunError):
+                guest_control.target(self.data, self.result, changed, "database")
+        changed = copy.deepcopy(current)
+        changed["_idarsi_effective_env"]["MOLECULE_FILE"] = "/foreign" + str(actual) + "/molecule.yml"
+        with self.assertRaises(RunError):
+            guest_control.target(self.data, self.result, changed, "database")
+
     def test_missing_direct_generation_never_allocates(self):
         with patch.object(self.store, "allocate") as allocate, patch.object(guest_control, "execute") as execute:
             with self.assertRaises(FileNotFoundError):
@@ -282,6 +348,95 @@ class GuestControlTests(unittest.TestCase):
                 with self.assertRaises((RunError, ValueError)):
                     guest_control.execute(self.store, self.data, dict(self.operation(), **{key: value}))
                 backend.assert_not_called()
+
+
+class ConfigurationNormalizationTests(unittest.TestCase):
+    def config(self, root, quote='"'):
+        return {
+            "_idarsi_effective_ephemeral": root,
+            "_idarsi_effective_env": {
+                "MOLECULE_EPHEMERAL_DIRECTORY": root, "MOLECULE_FILE": root + "/molecule.yml",
+            },
+            "driver": {"safe_files": [root + "/collections/*"]},
+            "dependency": {"name": "shell", "command": (
+                'python3 "/example/role/tests/dependency.py" --ephemeral-directory '
+                + quote + root + quote + " --molecule-file " + quote + root + "/molecule.yml" + quote
+            )},
+        }
+
+    def test_single_double_and_unquoted_tokens_preserve_command_spelling(self):
+        for quote in ('"', "'", ""):
+            roots = ("/planning space/ephemeral", "/execution space/ephemeral") if quote else (
+                "/planning/ephemeral", "/execution/ephemeral",
+            )
+            before, after = [self.config(root, quote) for root in roots]
+            with self.subTest(quote=quote):
+                self.assertEqual(
+                    guest_control.comparable_configuration(before), guest_control.comparable_configuration(after),
+                )
+                after["dependency"]["command"] += " --different-option"
+                self.assertNotEqual(
+                    guest_control.comparable_configuration(before), guest_control.comparable_configuration(after),
+                )
+
+    def test_suffix_foreign_prefix_and_literal_placeholder_never_collide(self):
+        for spelling in (
+            lambda root: root + "-foreign",
+            lambda root: "/foreign" + root,
+            lambda root: 'literal "' + root + '"',
+        ):
+            before, after = self.config("/planning/ephemeral"), self.config("/execution/ephemeral")
+            before["unrelated"] = spelling("/planning/ephemeral")
+            after["unrelated"] = spelling("/execution/ephemeral")
+            with self.subTest(spelling=before["unrelated"]):
+                self.assertNotEqual(
+                    guest_control.comparable_configuration(before), guest_control.comparable_configuration(after),
+                )
+        before, after = self.config("/planning/ephemeral"), self.config("/execution/ephemeral")
+        after["dependency"]["command"] = after["dependency"]["command"].replace(
+            '"/execution/ephemeral"', '"<MOLECULE_EPHEMERAL>"',
+        )
+        self.assertNotEqual(
+            guest_control.comparable_configuration(before), guest_control.comparable_configuration(after),
+        )
+
+    def test_quoted_literal_option_and_escaped_forms_are_not_reinterpreted(self):
+        for template in (
+            """python3 --note "literal --ephemeral-directory '{root}'" """,
+            r'python3 --ephemeral-directory \"{root}\"',
+            """python3 --unrelated "{root}" """,
+        ):
+            before, after = self.config("/planning/ephemeral"), self.config("/execution/ephemeral")
+            before["dependency"]["command"] = template.format(root="/planning/ephemeral")
+            after["dependency"]["command"] = template.format(root="/execution/ephemeral")
+            with self.subTest(template=template):
+                self.assertNotEqual(
+                    guest_control.comparable_configuration(before), guest_control.comparable_configuration(after),
+                )
+
+    def test_traversal_paths_remain_literal_standalone_and_in_both_dependency_arguments(self):
+        roots = ("/planning space/ephemeral", "/execution space/ephemeral")
+        for suffix in (
+            "/../foreign.yml", "/child/../../foreign.yml",
+            "/child/../inside.yml", "//../foreign.yml",
+        ):
+            before, after = [self.config(root) for root in roots]
+            for config, root in zip((before, after), roots):
+                config["unrelated"] = root + suffix
+            with self.subTest(location="standalone", suffix=suffix):
+                normalized = guest_control.comparable_configuration(before)
+                self.assertEqual(normalized["unrelated"], roots[0] + suffix)
+                self.assertNotEqual(normalized, guest_control.comparable_configuration(after))
+            for option in ("--ephemeral-directory", "--molecule-file"):
+                before, after = [self.config(root) for root in roots]
+                for config, root in zip((before, after), roots):
+                    config["dependency"]["command"] = (
+                        'python3 "/example/role/tests/dependency.py" ' + option + ' "' + root + suffix + '"'
+                    )
+                with self.subTest(option=option, suffix=suffix):
+                    normalized = guest_control.comparable_configuration(before)
+                    self.assertEqual(normalized["dependency"]["command"], before["dependency"]["command"])
+                    self.assertNotEqual(normalized, guest_control.comparable_configuration(after))
 
 
 class DomainValidationTests(unittest.TestCase):
