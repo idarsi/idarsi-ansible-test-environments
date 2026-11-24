@@ -192,6 +192,7 @@ def lifecycle(store: Store, action: str, run_id: str) -> None:
             if data["operations"][-1]["id"] != operation_id:
                 raise RunError("Create mutation journal changed before completion")
             data["operations"][-1]["completion"] = operation_id
+            data["instances_ready"] = instances
             store.save(data)
             return
         backend = Backend(store, data)
@@ -227,6 +228,7 @@ def lifecycle(store: Store, action: str, run_id: str) -> None:
             if data["operations"][-1]["id"] != operation_id:
                 raise RunError("Create mutation journal changed before completion")
             data["operations"][-1]["completion"] = operation_id
+            data["instances_ready"] = instances
             store.save(data)
 
 

@@ -86,6 +86,99 @@ mocked-suite evidence only.
 
 ## Dual-mode helper checks
 
+`python -B -m unittest discover -s tests -p 'test_isolated_direct_network_tail.py' -v`
+uses only disposable fixture state. It checks refusal-only direct network-tail
+diagnosis, original-journal preservation, no state creation/writes/backend
+queries/signals, existing-pointer and lock failures, context/operation/handoff
+mismatches, malformed or incomplete earlier guest operations, and rejection of
+apply/force options. It establishes neither live resource absence nor recovery
+eligibility. The default diagnostic grants no mutation or lease-release authority.
+The same focused pattern `test_isolated_direct_network_tail*.py` also includes
+pure historical-checkpoint bindings and bounded producing-source readers.
+Byte-reader tests patch only the approved fingerprint definition for disposable
+fixture bytes; a separate test verifies the real embedded 13-file composite.
+They cover traversal, file/directory symlinks, hardlinks, FIFO, unsafe ownership
+and permissions, replacement, late mutation and changed bytes/definitions.
+No snapshot code is imported/executed and no runtime/backend query runs.
+`test_isolated_direct_network_tail_standard.py` separately exercises the opt-in
+rootless standard-libvirt profile with fake runtime/API/process boundaries:
+private plan binding, exact acceptance and drift refusal, gated-worker intent
+ordering, original-history preservation, independent parent settlement,
+same-boot/session/visibility guards, kernel address/multipath-route leftovers,
+two-snapshot churn, mutation uncertainty without retry, settlement-fsync failure
+and explicit uncertain terminal publication/reconfirmation. Installed-runtime
+fixtures distinguish measured package bytes/service birth from unverified loaded
+images, hooks, firewall and helpers. No actual profile dry-run or apply is run by
+these tests; tester-owned read-only qualification and separate operator apply
+approval remain required.
+Packaged-service argv regressions cover the actual systemd
+`$VIRTNETWORKD_ARGS` representation using measured actual argv, rejecting unknown
+variables/options, nonpackaged fragments, drop-ins, literal/actual conflicts,
+unreadable/truncated/oversized cmdline and changed daemon birth before/after read.
+The procfs/pidfd boundary is mocked; these tests do not read a host daemon.
+The actual Fedora global timeout-abort drop-in has an exact byte fixture.
+Qualification tests require its fixed package/build/source-RPM/hash/length,
+safe root-owned file metadata and effective `TimeoutStopFailureMode=abort`;
+unknown/additional paths, mismatched metadata/content/effective properties,
+unsafe permissions and unreadable files refuse. No arbitrary override is ignored.
+Address snapshot regressions accept ordinary `5301 -> 5300` valid/preferred
+lifetime countdowns and canonical forever representations while rejecting
+renewals, zero/deprecation or finite/infinite transitions, malformed values,
+IP/prefix/scope/flag/interface/master/inventory changes and independent route/link
+changes. Raw fixture observations are asserted unchanged. Independent tester
+reads motivated this case; these mocked checks do not identify the exact
+unpublished pair that caused an earlier CLI snapshot refusal.
+
+On 2026-11-23, the tester recorded direct owned guest-control acceptance with
+one Rocky Linux guest and one 1 GiB data disk: create, abrupt stop, stopped
+no-op, start, running no-op and fixture verification passed. Initial destroy
+was blocked: network-reference discovery refused foreign domains
+referencing an absent network. The owned guest/disks were removed, but the
+network and allocation were retained with an incomplete destroy operation.
+On 2026-11-24, separately approved rootless standard-libvirt reconciliation
+passed and released that allocation while preserving the original unsealed
+destroy and history. This was reconciliation, not completion of the old destroy.
+
+Fresh direct `kvm-forward` create/verify/destroy then passed with ordinary sealed
+cleanup and creation-time ownership provenance. Fresh supervised
+`kvm-supervised-control` passed the full implemented standard sequence, stop/start,
+SSH and the 1 GiB data-disk checks; cleanup was sealed and every recorded session
+was empty. These bounded checks used Python 3.12.16, Core 2.20.8, Molecule 26.8.0
+and an existing Rocky Linux 9 qcow2 image, without image builds/downloads, sudo
+or dependency installation. Tested source was `9c2cabe` plus uncommitted helper
+changes, not a later documentation commit. Exact generations and code fingerprints
+are recorded in the [technical acceptance record](docs/isolated-test-runs.md#recorded-guest-control-and-network-tail-acceptance).
+Interruption/cancellation, broader OS/controller lanes, GUI and PostgreSQL role
+acceptance are not established by these helper checks.
+
+`python -B -m unittest discover -s tests -p 'test_isolated_network.py' -v`
+checks the narrow confirmed-inactive foreign name-only dangling-reference
+exception, strict default/recovery behavior, fresh complete inventories and two
+matching dependency snapshots. Active or generation-owned domains, target
+names/UUIDs, aliases/masters, resolved `actual` sources, embellished sources,
+malformed discovery and between-snapshot churn still refuse destruction.
+All backend/kernel operations in these tests are mocked.
+Creation-time UUID/name evidence is also checked before guest definition and
+after guest-journal clearing. Changed UUIDs retaining owned names, original
+UUIDs with missing/changed descriptions, missing/ambiguous ownership provenance
+and missing/duplicate observed domain names deny the dangling exception.
+
+`python -B -m unittest discover -s tests -p 'test_isolated_guest_control.py' -v`
+checks owned KVM guest control using private temporary state and mocked backend
+commands: unsupported dispatch, CLI restrictions, existing-generation authority,
+logical uniqueness, durable intent ordering, closed admission, result/seal
+validation, exact-UUID transitions and no-ops, timeout/write-failure retention,
+live/persistent identity, interface and backing-chain refusal. Active-image
+headers are never opened; inactive headers must match the captured chain.
+No guest or host-daemon operation is executed by these unit tests. Bounded
+dual-mode runtime results are recorded above; wider interruption/cancellation
+and platform acceptance remain tester-owned.
+Additional review regressions compare two real installed Molecule config parses
+(temporary supervisor root versus actual generation root), reject managed-save
+state, filesystem/host-device exports and contradictory or ambiguous interface
+sources in either XML definition. The real backend attachment guard is exercised
+for changed bus, serial, format and extra disks.
+
 `python3 -m unittest discover -s tests -p 'test_isolated_context.py' -v`
 checks incomplete-operation refusal even with empty sessions, sealed-session
 quiescence requirements, generic cleanup refusal for direct generations,
