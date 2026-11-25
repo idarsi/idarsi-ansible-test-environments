@@ -8,7 +8,7 @@ import stat
 from typing import Iterator
 
 from .processes import boot_id, process
-from .state import RunError, Store, atomic_json, lock
+from .state import RunError, Store, atomic_json, existing_lock, lock
 
 PROTOCOL = "session-v1"
 
@@ -25,7 +25,15 @@ def gate(store: Store, run_id: str) -> dict:
         ):
             raise RunError("Unsafe supervised admission gate")
         data = json.load(stream)
-    if data.get("version") != 1 or data.get("id") != run_id or data.get("state") not in ("open", "closed"):
+    return validate_gate(data, run_id)
+
+
+def validate_gate(data, run_id):
+    """Shared gate schema check for ordinary and bounded existing-only readers."""
+    if (
+        not isinstance(data, dict) or data.get("version") != 1 or data.get("id") != run_id
+        or data.get("state") not in ("open", "closed")
+    ):
         raise RunError("Invalid supervised admission gate")
     return data
 
@@ -165,6 +173,26 @@ def authorize(store: Store, run_id: str, expected: dict) -> dict:
                 registered = registered_current(data)
                 store.save(data)
                 return registered
+
+
+def validate_existing(store: Store, run_id: str, expected: dict, *, _existing_lock=None) -> None:
+    """Caller holds resources: prove read-only ancestry without registering it."""
+    from .readonly import read_file, strict_json
+
+    lock_existing = existing_lock if _existing_lock is None else _existing_lock
+    with lock_existing(store.directory(run_id) / ".admission.lock"):
+        data = store.load(run_id)
+        binding(data, expected)
+        control = validate_gate(strict_json(read_file(
+            store.directory(run_id) / "admission.json", 16384,
+        )), run_id)
+        if control["state"] != "open":
+            raise RunError("Supervised admission is closed")
+        with prove_sessions(data) as sessions:
+            for record in sessions:
+                matches = [old for old in data["workers"] if old["pid"] == record["pid"]]
+                if matches and matches != [record]:
+                    raise RunError("Supervised session identity is stale or ambiguous")
 
 
 @contextlib.contextmanager

@@ -269,6 +269,7 @@ class ManagedEvidenceTests(GraphFixture):
         template = self.root / "test.ks"
         template.write_text("@@SSH_USER@@\n@@SSH_PUBLIC_KEY@@\n@@NETWORK_CONFIGURATION@@\n")
         platform = {
+            "name": self.guest["logical"],
             "install_source": "/fixture.iso", "kickstart": str(template),
             "ssh_user": "molecule", "disk_size_gb": 20, "memory_mb": 2048,
             "vcpus": 2, "install_timeout": 60,

@@ -1,5 +1,82 @@
 # Testing
 
+## Existing-generation guest proof
+
+With an already activated approved controller and this checkout's helper binding:
+
+```bash
+python -B -m unittest discover -s tests -p 'test_isolated_existing_config.py' -v
+python -B -m unittest discover -s tests -p 'test_isolated_guest_validation.py' -v
+python -B -m unittest discover -s tests -p 'test_isolated_guest_proof_control.py' -v
+python -B -m unittest discover -s tests -p 'test_isolated_logical_names.py' -v
+```
+
+These tests use private disposable state and mocked native observations, never
+VM/backend mutation or SSH. They cover completed create followed only by sealed
+owned-KVM stop/start operations, native stopped-target refusal and running-target
+success, no-ops/other-guest history, malformed seals/workers/targets/order,
+unchanged direct and supervised published mappings, quoted relocation using the
+main guest-control comparator, finite confidential refusals, and byte/metadata
+preservation including workers and admission. Names remain ASCII with the
+existing character policy, now accepting 1–63 characters.
+
+The installed-controller bridge tests are opt-in:
+`IDARSI_TEST_INSTALLED_CONTROLLERS=1` requires all three existing approved lanes;
+missing lanes are blockers, not installation requests. Without this flag those
+two tests skip. No new environment or dependency installation is needed.
+Portable CI parser regressions still run whenever Molecule is installed, even
+without controller activation or a repository `.venv` layout. Their test-only
+child fixture substitutes only the pure controller policy function, leaving
+Molecule parsing, configuration guards and relocation comparisons real. It does
+not spoof `sys.prefix` or `VIRTUAL_ENV` or add a production override. The
+isolated-layout regression additionally proves the unmodified production bridge
+still refuses missing authority. Explicit installed-lane fixtures exercise real
+supervised policy acceptance and missing-activation refusal on each lane, without
+the portable substitution. Run the portable layout check alone with:
+`python -B -m unittest discover -s tests -p 'test_isolated_parser_portability.py' -v`.
+The source-qualified historical role/direct acceptance records below are not
+combined helper runtime evidence. The subsequent bounded combined acceptance is
+recorded separately below; it does not extend native coverage to every controller.
+Network provenance and recovery profile tests remain authoritative: changed
+combined backend bytes must still refuse the frozen recovery source profile.
+No source fingerprint is automatically updated to make a check pass.
+
+## Combined-source acceptance — 2026-11-25
+
+The reviewed combined implementation on base
+`db87dc508c16d9bc68c85f5045e3ab0529cf388c` plus 24 uncommitted integration files
+passed `make validate` and `yamllint .`. Full discovery reported **424 tests:
+422 executed, two explicit installed-controller opt-in skips, zero failures or
+errors**. Both opt-in requirements have separate passing evidence: the genuine
+min/current/next installed bridge method and the current-controller read-only
+bridge test. The shell target's two auxiliary four-test suites also passed;
+they are not included in the 424 count. Ruff was unavailable, not installed or
+represented as passing.
+
+Subsequent explicitly authorized native acceptance passed on Python 3.12.16,
+Ansible Core 2.20.8 and Molecule 26.8.0:
+
+| Native scope | Result |
+| --- | --- |
+| Helper KVM, direct and supervised; Rocky Linux 9, one guest with root overlay and one 1-GiB data disk | Running proof, sealed stop, finite stopped-target refusal, stop no-op, sealed start, running proof and start no-op passed; ordinary cleanup sealed and cleaned. |
+| Podman role whole `default`, KVM backend; Rocky Linux 9 **and** 10, retained direct lifecycle | Create/converge/idempotence/verify/destroy passed with the same retained generation; both hosts had idempotence `changed=0`. |
+| Same whole two-OS consumer, canonical supervised full default lifecycle | Fresh native proofs and the full unchanged sequence passed; both hosts had idempotence `changed=0`; ordinary supervised cleanup passed. |
+
+All four new generations were authoritatively cleaned, mutations sealed and
+recorded worker births quiescent; exact owned resources were absent and both
+supervised gates closed. The final supported admission check was clear.
+Source maps, source-image bytes/metadata and foreign resource fingerprints were
+unchanged. Proof snapshots preserved state/mapping/admission and native XML;
+the helper fixture's repeated power controls are not a claim of power-operation
+idempotence. The native window ended **08:33:28 UTC**; this record grants no
+further execution authorization.
+
+See the [source-qualified matrix and limits](docs/isolated-test-runs.md#combined-proofcontrol-acceptance)
+for exact source-map fingerprints and remaining coverage. These results predate
+this documentation-only update and any publication commit. Helper publication,
+consumer pin update and CI against the published source remain pending; no
+release-readiness or unpublished-pin CI claim is made.
+
 ## Interrupted network-tail recovery checks
 
 Use an already activated approved shared controller; do not create a worktree

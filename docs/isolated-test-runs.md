@@ -285,6 +285,54 @@ The VM-free regressions are `tests/test_isolated_guest_control.py`; they use
 private temporary state and mocked backend boundaries. They do not establish
 real KVM fault injection, runtime concurrency or interruption acceptance.
 
+### Read-only existing guest proof
+
+`scripts/scenario-context validate-guest --backend kvm --role /path/to/role
+--scenario kvm-example --platform database` consumes one bounded JSON object on
+stdin with exactly `address`, integer `port` (22), `user`, and canonical
+`identity_file`. Run it from the approved activated shared controller with
+`IDARSI_TEST_ENVIRONMENT` bound to the actual helper checkout and the current
+Molecule selector environment intact. It never reconstructs missing authority.
+
+The helper opens existing private state, pointer/resource/admission locks and
+the current Molecule state/inventory only. It asks installed Molecule to merge
+current sources through an existing-only bridge with private temporary scratch.
+It does not allocate, publish mappings, register workers, signal sessions,
+connect by SSH, control power, clean resources, or migrate old generations.
+Missing state, busy/unsafe locks, partial handoff, changed identity/configuration
+or stale/substituted published mappings fail closed in either execution mode.
+Logical platform names accept 1–63 ASCII characters under the existing
+letter-first alphanumeric/underscore/hyphen policy.
+
+A valid completed create may be followed **only** by supported completed sealed
+`owned-kvm-v1` stop/start operations. Main completion and control validators
+check recorded workers, domain UUID and logical guest targets; destroy,
+incomplete, unsupported or malformed histories refuse. Configuration comparison
+uses the main pure guest-control comparator, preserving quoting, traversal
+literals and unrelated environment differences. Actual generation ephemeral
+binding is validated separately. Fresh native observations must show the
+selected guest running on its owned network with the exact authoritative SSH
+mapping. A stopped selected guest refuses; a subsequent valid start may pass.
+Another guest's valid control history does not itself invalidate the target.
+
+Success emits exactly seven keys: `schema`
+(`idarsi.scenario-context/guest-validation-v1`), `role`, `scenario`, `generation`,
+`platform`, `backend` and `validated: true`. This is not peer-key attestation,
+SSH authentication, a recovery approval or mutation authority.
+Failure emits no stdout and a single stderr JSON object with exactly `schema`
+(`idarsi.scenario-context/guest-refusal-v1`) and one finite `code`:
+`LOCK_BUSY`, `NATIVE_IDENTITY`, `NETWORK_OBSERVATION`, `SSH_MAPPING`,
+`READONLY_STATE`, `AUTHORITY_PARSE`, `PROCESS_SUPERVISION` or `UNKNOWN_REFUSAL`.
+Private paths, configuration, connection values and raw exception text are
+never included in this refusal API.
+
+This integration does not change guest-control mutation APIs, network
+creation-time domain UUID/name provenance, recovery/direct-tail profiles or
+their pinned fingerprints. Changed combined backend source still refuses the
+frozen recovery profile; do not repin it automatically. Bounded combined native
+acceptance is recorded [below](#combined-proofcontrol-acceptance); publication,
+consumer pin update and published-source CI remain pending.
+
 ### Lifecycle context identity
 
 There is no “legacy unsupported” success classification or fallback exit code:
@@ -995,6 +1043,68 @@ recovery. Legacy ambiguous disk records and replacements still fail closed;
 the tool never adopts a file merely because its name matches.
 
 ## Verification
+
+### Combined proof/control acceptance
+
+On **2026-11-25**, the reviewed combined helper implementation passed the bounded
+matrix below with Python **3.12.16**, Ansible Core **2.20.8** and Molecule
+**26.8.0** in the actual approved current controller. Tested helper source was
+base `db87dc508c16d9bc68c85f5045e3ab0529cf388c` plus **24 uncommitted integration
+files**, not a later publication commit. The Podman consumer likewise used its
+existing **43-entry uncommitted task diff**. Source maps were frozen before
+execution and matched exactly after the final barrier; this subsequent update
+changes documentation only, not the accepted implementation or tests.
+
+| Scope | Observed result |
+| --- | --- |
+| Direct helper `kvm-native`, one Rocky Linux 9 guest, root overlay plus 1-GiB data disk | Create/converge/verify/destroy passed; running proof, sealed stop, stopped-target `NATIVE_IDENTITY` refusal, stop no-op, sealed start, running proof and start no-op passed. Retained verify repeated proof without controls. |
+| Supervised helper, same fixture, default full sequence | Same proof/control gates passed through genuine task ancestry and new child sessions. Repeated sealed histories passed; read-only proof did not register workers or change admission. Ordinary supervisor cleanup passed. |
+| Podman role whole `default`, **KVM backend**, Rocky Linux 9 **and** 10, retained direct commands | Create/converge/idempotence/verify/destroy all exited zero, retaining one generation through the phases. Both guests passed native proof gates; idempotence and verify reported `changed=0` on each host. |
+| Same whole two-OS consumer, canonical `test-run run --backend kvm --scenario default` | Full unchanged default sequence exited zero with fresh native proof gates on both guests; each host reported idempotence and verify `changed=0`. |
+
+All four exact new generations were authoritatively `cleaned`, with every
+mutation sealed and every recorded worker birth quiescent. Independent exact
+owned domain/network identity, bridge and overlay absence checks passed; both
+supervised admission gates were closed. Final supported admission inspection
+was unblocked with no operations. Source-image full hashes/metadata, foreign
+resource fingerprints and frozen source maps remained unchanged. No foreign
+cleanup, recovery, manual seals, forced termination, dependency installation or
+source-image preparation was used. The authorized window ended **08:33:28 UTC**
+after the final barrier; no further allocation is authorized by this record.
+
+Proof snapshots preserved existing run/Molecule state, mappings, workers,
+admission and native domain/network XML. Direct pointer metadata outside those
+snapshot roots was not independently sampled in native execution; pointer
+validation and read-only behavior also have unit coverage. Power-control
+receipts independently established real transitions and no-ops. The helper
+fixture deliberately repeats controls during its supervised idempotence phase;
+that is repeated-history coverage, **not power-operation idempotence**. The
+consumer's two-host zero-change idempotence is a separate result.
+
+Portable source qualification (SHA-256 of compact, key-sorted UTF-8 JSON mapping
+relative source paths to their file SHA-256, excluding the environment alias):
+
+| Accepted source set | Files | Map SHA-256 |
+| --- | --- | --- |
+| Combined helper tracked/nonignored-new regular files under `scripts/` and `tests/` | 106 | `30062d59c6cc45bcf22f10347e9b4babcd911e9f81e4eeaa9143a29e6c1154ef` |
+| Podman consumer tracked/nonignored-new source map | 145 | `01d0333e07e1603b25f6bfc714be568bed71aecdf8c91a8878d10dbde7f67618` |
+
+The same combined source passed `make validate` (424 discovered Python tests,
+422 executed, two opt-in skips, zero failures/errors) and `yamllint .`; both
+installed-bridge opt-in requirements separately passed, including genuine
+min/current/next lane parsing and the current read-only bridge check. The
+portable no-controller-layout parser regressions also passed. Ruff was
+unavailable and is not claimed as passing.
+
+These are local, source-qualified results, **not a release or CI/publication
+claim**. Helper publication, consumer pin update and CI against the published
+source remain pending. This does not rerun or extend the historical 12-entry
+role matrix, all-controller native matrix, PostgreSQL HA, destructive production
+fixtures, cryptographic SSH peer attestation, daemon interruption or host
+recovery. Protected guest-control/network algorithms and recovery/direct-tail
+profiles/fingerprints remain unchanged; combined backend bytes still refuse the
+frozen recovery source profile. Earlier acceptance records below retain their
+own source qualifications.
 
 ### Recorded runtime acceptance
 

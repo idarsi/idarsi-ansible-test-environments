@@ -334,6 +334,11 @@ class AttachmentTests(Fixture):
 class EffectiveConfigTests(Fixture):
     def setUp(self):
         super().setUp()
+        from config_bridge_fixture import portable_controller_policy
+
+        policy = portable_controller_policy()
+        policy.__enter__()
+        self.addCleanup(policy.__exit__, None, None, None)
         self.scenario = self.root / "molecule" / "validation"
         self.scenario.mkdir(parents=True)
         self.source = self.scenario / "molecule.yml"
@@ -342,6 +347,9 @@ class EffectiveConfigTests(Fixture):
         self.environment.update(
             HOME=str(self.root), XDG_CACHE_HOME=str(self.root / "cache"),
             MOLECULE_EPHEMERAL_DIRECTORY=str(self.store.ephemeral(self.run["id"])),
+            # This is the source fixture's real helper path, not controller
+            # activation. Portable CI intentionally supplies no VIRTUAL_ENV.
+            IDARSI_TEST_ENVIRONMENT=str(REPO),
         )
         # The bridge must execute the same pinned interpreter as this test.
         self.environment["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"]

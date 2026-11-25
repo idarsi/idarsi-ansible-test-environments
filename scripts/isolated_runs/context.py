@@ -53,12 +53,14 @@ def require_completed(data: dict, quiescent: bool = True) -> None:
         raise RunError("Mutation worker session is not empty")
 
 
-def resolved(args: argparse.Namespace, store: Store) -> tuple:
+def resolved(args: argparse.Namespace, store: Store, *, existing_config=None, _existing_lock=None) -> tuple:
     """Resolve actual effective identity; never replace the direct ephemeral."""
     role = Path(args.role).resolve(strict=True)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", args.scenario):
         raise RunError("Invalid scenario name")
-    config = parse_configuration(role, args.scenario, dict(os.environ), direct=True)
+    config = existing_config if existing_config is not None else parse_configuration(
+        role, args.scenario, dict(os.environ), direct=True,
+    )
     config["platforms"] = validate_platforms(
         args.backend, config.get("platforms"), role / "molecule" / args.scenario,
     )
@@ -140,10 +142,15 @@ def resolved(args: argparse.Namespace, store: Store) -> tuple:
             if not valid:
                 raise RunError("Supervised binding mismatch: " + field)
         if "admission_protocol" in data:
-            admission.authorize(store, data["id"], {
+            authorize = admission.authorize if existing_config is None else admission.validate_existing
+            expected = {
                 "id": data["id"], "role": str(role), "scenario": args.scenario,
                 "backend": args.backend, "ephemeral": str(ephemeral),
-            })
+            }
+            if existing_config is not None and _existing_lock is not None:
+                authorize(store, data["id"], expected, _existing_lock=_existing_lock)
+            else:
+                authorize(store, data["id"], expected)
         elif not any(
                 member["session"] == os.getsid(0)
                 for worker in data["workers"] for member in members(worker)
@@ -154,12 +161,18 @@ def resolved(args: argparse.Namespace, store: Store) -> tuple:
 
 
 def pointer_path(store: Store, result: dict) -> tuple:
+    path, identity = existing_pointer_path(store, result)
+    private_directory(path.parent)
+    return path, identity
+
+
+def existing_pointer_path(store: Store, result: dict) -> tuple:
+    """Compute the direct identity without initializing its directory or locks."""
     identity = {key: result[key] for key in (
         "role", "scenario", "backend", "ephemeral_directory",
     )}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    directory = private_directory(store.root / ".contexts")
-    return directory / (key + ".json"), identity
+    return store.root / ".contexts" / (key + ".json"), identity
 
 
 def mapping(result: dict, instances: list) -> None:
@@ -343,6 +356,11 @@ def direct(args: argparse.Namespace, store: Store, result: dict, config: dict) -
 
 
 def main(argv=None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] == "validate-guest":
+        from .guest_validation import main as validate_guest
+
+        return validate_guest(arguments[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=(
         "resolve", "init", "create", "destroy", "inspect", "capabilities", "_worker",

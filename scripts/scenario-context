@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Versioned shared Molecule lifecycle and dependency context helper."""
 
+import sys
+
+sys.dont_write_bytecode = True
+
 from isolated_runs.context import main
 
 if __name__ == "__main__":
