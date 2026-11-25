@@ -288,9 +288,13 @@ class Backend:
                 raise RunError("Domain disk serial, format or bus changed")
 
     def create(self, platforms: list) -> list:
+        from .cooperative_stop import check_create_stop
+
+        check_create_stop(self.store, self.data, "before-network")
         self.network()
         result = []
         for index, platform in enumerate(platforms):
+            check_create_stop(self.store, self.data, "before-guest")
             guest = {
                 "logical": platform["name"], "name": "itr-" + uuid.uuid4().hex,
                 "id": str(uuid.uuid4()) if self.data["backend"] == "kvm" else None,
@@ -372,6 +376,8 @@ class Backend:
                     raise RunError("Disk disappeared during provisioning")
 
     def provision_domain(self, guest: dict, platform: dict, index: int) -> dict:
+        from .cooperative_stop import check_create_stop
+
         key = self.directory / "kvm_ed25519"
         if not key.exists():
             command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)])
@@ -442,6 +448,10 @@ class Backend:
         deadline = time.monotonic() + platform["install_timeout"]
         install_restarted = False
         while time.monotonic() < deadline:
+            # virsh/virt-install and journal writes above have returned. Stop
+            # here, not by killing their client during an uncertain daemon RPC.
+            # Guest installation/SSH readiness need not finish before cleanup.
+            check_create_stop(self.store, self.data, "guest-readiness")
             if (
                 "install_source" in platform and not install_restarted
                 and command(VIRSH + ["domstate", guest["id"]]) in ("shut off", "shutoff")

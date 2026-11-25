@@ -188,7 +188,16 @@ def lifecycle(store: Store, action: str, run_id: str) -> None:
                     "id": operation_id, "action": "create", "worker": worker,
                 })
                 store.save(data)
-            instances = Backend(store, data).create(data["config"]["platforms"])
+            from .cooperative_stop import CreateStopped, seal_stopped_create
+
+            try:
+                instances = Backend(store, data).create(data["config"]["platforms"])
+            except CreateStopped as stopped:
+                seal_stopped_create(store, run_id, operation_id, stopped)
+                raise RunError(
+                    "Create stopped cooperatively before readiness; "
+                    "the supervisor will clean the owned resources"
+                ) from stopped
             from .context import mapping
 
             mapping({"ephemeral_directory": expected["ephemeral"]}, instances)

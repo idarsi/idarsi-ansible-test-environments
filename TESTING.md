@@ -24,6 +24,24 @@ processes are terminated/reaped in `finally`. They require Linux pidfd support.
 Real KVM stop-during-create/destroy plus concurrent-peer acceptance remains
 tester-owned and unverified; these fixtures are not a backend cancellation barrier.
 
+`test_isolated_create_stop.py` checks closed-gate create checkpoints and the
+worker-bound `outcome: stopped` seal with fake backends. Ready instances are not
+published; mismatched identity/checkpoint/worker, open gate, uncertain host RPC
+and completion-write failure remain incomplete. A mocked KVM provisioner check
+closes admission just after successful `virt-install` and verifies cancellation
+before SSH polling; a start timeout never becomes a stopped-create seal.
+`test_isolated_create_stop_processes.py` exercises the checkpoint-to-cleanup
+path with real disposable Python sessions, gated cleanup worker and journal:
+the stopped seal precedes session termination, guest/network cleanup and
+`cleaned` publication. A second fixture executes the real backend teardown
+method against mocked libvirt queries and a private temporary disk, asserting
+exact-UUID hard destroy before undefine/unlink and preservation of a foreign
+peer. Neither fixture starts or signals a real VM.
+
+```bash
+python -B -m unittest discover -s tests -p 'test_isolated_create_stop*.py' -v
+```
+
 ## Interrupted network-tail recovery checks
 
 Use an already activated approved shared controller; do not create a worktree

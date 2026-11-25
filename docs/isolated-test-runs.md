@@ -408,6 +408,26 @@ host-mutation boundary is settled, the supervisor stops their admitted sessions
 and cleans its exact owned resources. Direct/legacy generations without the
 supervised admission protocol keep their previous contracts.
 
+In particular, a KVM guest's OS installation and SSH-readiness polling are not
+host RPC completion barriers. A supervised create checks the closed gate before
+network creation, between guests and at each readiness-loop boundary after
+successful host commands. At these checkpoints only, the original admitted
+worker can seal its operation with `outcome: stopped` and the exact checkpoint.
+It publishes no ready-instance mapping or `instances_ready` result and returns
+an error to Molecule. This means the host mutation has settled sufficiently for
+supervisor cleanup, **not** that the guest installation or test passed. A timed
+out/failed libvirt call, disk/fsync failure or failed seal write cannot use this
+path. Ordinary completion seals and historical incomplete operations are not
+rewritten.
+
+After those workers are quiescent, cleanup hard-powers-off each **exact owned**
+running VM with `virsh destroy UUID`, undefines it, verifies/removes its private
+disks and then removes its unshared run network. This is the libvirt-controlled
+equivalent of a forced guest poweroff: it does not wait for guest shutdown or
+send raw PID signals to an arbitrary QEMU. Shared images and foreign domains/
+networks are not deletion targets. Failed ownership/dependency checks or backend
+errors retain evidence and the allocation rather than claiming a clean exit.
+
 If the drain deadline expires, no worker signals or resource deletion are
 attempted by that cleanup invocation, and the allocation remains retained. The
 original mutation may still finish normally. After it completes, retry

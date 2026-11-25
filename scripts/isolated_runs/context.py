@@ -47,6 +47,10 @@ def require_completed(data: dict, quiescent: bool = True) -> None:
                 + "; retain resources and lease. Recovery is inspection-only; "
                 "a backend-specific cancellation barrier is not implemented."
             )
+        if operation.get("outcome") == "stopped":
+            from .cooperative_stop import validate_stopped_seal
+
+            validate_stopped_seal(data, operation)
         if operation["action"] in guest_control.ACTIONS:
             guest_control.validate_operation(operation, data)
     if quiescent and any(members(worker) for worker in data["workers"]):

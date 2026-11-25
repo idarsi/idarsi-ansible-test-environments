@@ -156,3 +156,6 @@ before signalling worker sessions, rather than interrupting a healthy create.
 The resource-lock drain is bounded at 120 seconds; timeout or missing completion
 proof retains the allocation. See [cooperative supervised stop](docs/isolated-test-runs.md#cooperative-supervised-stop)
 for exact-run retry and the remaining backend recovery limitations.
+KVM guest installation/SSH polling can stop at a completed-host-command boundary;
+cleanup then uses exact-UUID `virsh destroy` for forced guest poweroff before
+private disk/network removal. A stopped-create seal is not test success.
