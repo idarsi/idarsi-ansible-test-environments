@@ -9,6 +9,15 @@ See the [recorded scope and remaining matrix](docs/isolated-test-runs.md#verific
 before migrating scenarios; this is not acceptance of every supported OS or
 controller line.
 
+An existing-generation KVM target can also be checked with
+[`scenario-context validate-guest`](docs/isolated-test-runs.md#read-only-existing-guest-proof).
+This read-only receipt is not SSH authentication or permission to mutate a guest.
+Combined proof/control passed bounded direct/supervised native KVM acceptance
+on the current controller, including the Podman role's whole Rocky Linux 9/10
+default scenario. See the [source-qualified matrix](docs/isolated-test-runs.md#combined-proofcontrol-acceptance).
+Helper publication, consumer pin update and published-source CI remain pending;
+this is not a release-readiness claim.
+
 Interrupted supervised KVM **network-tail** destroys have an explicit
 [`recover-destroy` procedure](docs/isolated-test-runs.md#interrupted-network-tail-recovery).
 It preserves the original missing seal. Same-boot legacy recovery and teardown

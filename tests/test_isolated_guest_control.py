@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from isolated_runs import cli, context, guest_control
 from isolated_runs.backends import Backend
 from isolated_runs.state import RunError, Store, atomic_json
+from config_bridge_fixture import portable_controller_policy
 
 
 class WorkerDispatchTests(unittest.TestCase):
@@ -72,6 +73,7 @@ class GuestControlTests(unittest.TestCase):
             guest_control.target(self.data, self.result, self.config, "database")
 
     @unittest.skipUnless(importlib.util.find_spec("molecule"), "Activate existing pinned Molecule")
+    @portable_controller_policy()
     def test_real_supervisor_and_generation_configurations_compare_without_losing_binding(self):
         source = self.root / "molecule" / self.data["scenario"] / "molecule.yml"
         source.parent.mkdir(parents=True)
@@ -104,6 +106,7 @@ class GuestControlTests(unittest.TestCase):
             guest_control.target(self.data, self.result, changed, "database")
 
     @unittest.skipUnless(importlib.util.find_spec("molecule"), "Activate existing pinned Molecule")
+    @portable_controller_policy()
     def test_real_quoted_dependency_command_relocates_only_ephemeral_arguments(self):
         source = self.root / "molecule" / self.data["scenario"] / "molecule.yml"
         source.parent.mkdir(parents=True)

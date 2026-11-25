@@ -588,6 +588,16 @@ class ExecutingContextTests(unittest.TestCase):
             self.distribution.assert_not_called()
         self.assertEqual(recovery.executing_context()["sources"]["backends"], self.backend_digest)
 
+    def test_combined_backend_source_is_not_automatically_approved_for_recovery(self):
+        actual = Path(__file__).resolve().parents[1] / "scripts/isolated_runs/backends.py"
+        source = actual.read_bytes()
+        self.assertNotEqual(hashlib.sha256(source).hexdigest(), REAL_BACKEND_SOURCE)
+        (self.root / "scripts/isolated_runs/backends.py").write_bytes(source)
+        with patch.object(recovery, "BACKEND_SOURCE", REAL_BACKEND_SOURCE):
+            with self.assertRaisesRegex(RunError, "unsupported_original_source_profile"):
+                recovery.executing_context()
+            self.distribution.assert_not_called()
+
     def test_wrong_tooling_versions_or_import_location_refuse(self):
         for version, location in (("0", self.site), ("26.8.0", self.root)):
             self.distribution.side_effect = lambda name: SimpleNamespace(

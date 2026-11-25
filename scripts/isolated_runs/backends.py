@@ -20,6 +20,17 @@ LABEL = "io.idarsi.test-run"
 REPO = Path(__file__).resolve().parents[2]
 
 
+def kvm_instance(platform: dict, subnet: str, index: int, key: Path) -> dict:
+    """One authoritative allocation-to-SSH mapping for creation and validation."""
+    network = ipaddress.ip_network(subnet)
+    if network.version != 4 or network.prefixlen != 24 or not 0 <= index < 200:
+        raise RunError("Invalid managed KVM allocation")
+    return {
+        "instance": platform["name"], "address": str(network[index + 10]),
+        "user": platform["ssh_user"], "port": "22", "identity_file": str(key),
+    }
+
+
 def validate_platforms(backend: str, platforms: list, scenario: Path) -> list:
     """Validate the entire platform list before allocating backend resources."""
     common = {"name"}
@@ -41,8 +52,8 @@ def validate_platforms(backend: str, platforms: list, scenario: Path) -> list:
                 set(item) - common - (podman if backend == "podman" else kvm),
             )))
         name = item.get("name")
-        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,39}", name):
-            raise RunError("Platform name must be a safe logical inventory name")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,62}", name):
+            raise RunError("Platform name must be a safe logical inventory name of 1-63 ASCII characters")
         if name in names:
             raise RunError("Duplicate platform name")
         names.add(name)
@@ -378,7 +389,8 @@ class Backend:
         record = guest["disks"][0]
         path = Path(record["path"])
         subnet = ipaddress.ip_network(self.data["subnet"])
-        address = str(subnet[index + 10])
+        instance = kvm_instance(platform, self.data["subnet"], index, key)
+        address = instance["address"]
         gateway = str(subnet[1])
         disk = ["qemu-img", "create", "-f", "qcow2"]
         if "image_path" in platform:
@@ -461,10 +473,7 @@ class Backend:
                     "-o", "ConnectTimeout=4", "-o", "StrictHostKeyChecking=no",
                     "-o", "UserKnownHostsFile=/dev/null", platform["ssh_user"] + "@" + address, "true",
                 ], timeout=10)
-                return {
-                    "instance": guest["logical"], "address": address,
-                    "user": platform["ssh_user"], "port": "22", "identity_file": str(key),
-                }
+                return instance
             except RunError:
                 time.sleep(2)
         raise RunError("Guest did not become SSH-ready")

@@ -27,7 +27,8 @@ def parse_configuration(role: Path, scenario: str, environment: dict, direct: bo
         if not direct:
             effective_environment["MOLECULE_EPHEMERAL_DIRECTORY"] = str(Path(temporary) / "ephemeral")
         response = command(
-            ["python3", str(REPO / "scripts/isolated_runs/molecule_config.py"), str(source)],
+            ["python3", str(REPO / "scripts/isolated_runs/molecule_config.py"), str(source)]
+            + ([] if direct else ["--supervised"]),
             env=effective_environment, cwd=str(role),
         )
         try:
@@ -35,6 +36,11 @@ def parse_configuration(role: Path, scenario: str, environment: dict, direct: bo
         except json.JSONDecodeError:
             reason = "empty" if not response.strip() else "malformed"
             raise RunError("Molecule config bridge returned " + reason + " JSON response") from None
+    return validate_configuration(data, source)
+
+
+def validate_configuration(data, source):
+    """Shared postvalidation, independent of how installed Molecule was invoked."""
     if not isinstance(data, dict):
         raise RunError("Scenario config must be a mapping")
     if data.get("driver", {}).get("name") != "default":
@@ -317,8 +323,16 @@ def managed_environment() -> dict:
     """Remove inherited CLI defaults, including min's truthy 'false' parallel flag."""
     if any(key == "IDARSI_RUN_ID" or key.startswith("IDARSI_HANDOFF") for key in os.environ):
         raise RunError("Cannot start a supervisor from an inherited supervised handoff")
+    helper = os.environ.get("IDARSI_TEST_ENVIRONMENT")
+    if helper is not None:
+        try:
+            valid = bool(helper) and Path(helper).is_absolute() and Path(helper).resolve(strict=True) == REPO
+        except (OSError, RuntimeError, ValueError):
+            valid = False
+        if not valid:
+            raise RunError("Supervised runs require the activated shared helper binding")
     environment = {key: value for key, value in os.environ.items() if not key.startswith("MOLECULE_")}
-    environment.update(IDARSI_TEST_ENVIRONMENT=str(REPO), LC_ALL="C.UTF-8")
+    environment.update(LC_ALL="C.UTF-8")
     return environment
 
 
