@@ -281,3 +281,10 @@ independently of venv location; dependency bootstrap resolves the real ephemeral
 collections directory before create. Direct retained guests are not safe for
 same-context concurrent use. Incomplete mutations retain resources and leases
 with inspection-only recovery. The legacy launcher guidance below is unchanged.
+
+For ordinary supervised Stop, the helper first closes admission and waits up to
+120 seconds for an active host mutation to finish and seal before signalling
+workers. This prevents cancellation itself from cutting a healthy create short.
+It does not repair an already incomplete mutation or prove cancellation of a
+libvirt daemon request. See [cooperative supervised stop](isolated-test-runs.md#cooperative-supervised-stop)
+for timeout, exact-run retry and verification limits.

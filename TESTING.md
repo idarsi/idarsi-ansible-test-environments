@@ -1,5 +1,29 @@
 # Testing
 
+## Cooperative supervised stop checks
+
+With an existing approved controller, run:
+
+```bash
+python -B -m unittest discover -s tests -p 'test_isolated_cooperative_stop*.py' -v
+```
+
+The private temporary-journal unit fixtures invoke no backend tools or processes.
+They verify admission closure before a busy resource-lock wait, completion seal
+before any worker signal, missing/invalid seal refusal, timeout without signals
+or deletion, failed gate/unsafe lock refusal, peer preservation and retry after
+the original mutation seals. Existing admission and supervised-seal tests remain
+regressions for denied late lifecycle entry, actual cleanup sealing and retained
+uncertain operations.
+
+`test_isolated_cooperative_stop_processes.py` adds tester-owned fixtures with
+only disposable Python sessions: real admission/resource locks, durable seal
+before actual session TERM, queued admission refusal, timeout without signals,
+and missing-seal refusal. Their backend cleanup is mocked; all exact child
+processes are terminated/reaped in `finally`. They require Linux pidfd support.
+Real KVM stop-during-create/destroy plus concurrent-peer acceptance remains
+tester-owned and unverified; these fixtures are not a backend cancellation barrier.
+
 ## Interrupted network-tail recovery checks
 
 Use an already activated approved shared controller; do not create a worktree

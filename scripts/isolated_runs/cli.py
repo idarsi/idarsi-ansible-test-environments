@@ -59,7 +59,7 @@ def parse_configuration(role: Path, scenario: str, environment: dict, direct: bo
 
 
 def cleanup_locked(store: Store, run_id: str) -> None:
-    """Caller owns the supervisor lock; stop workers before resource mutation."""
+    """Caller owns supervisor; drain admitted mutations, stop workers, then clean."""
     data = store.load(run_id)
     if data["status"] == "cleaned":
         return
@@ -78,7 +78,11 @@ def cleanup_locked(store: Store, run_id: str) -> None:
     # Do not write even a status here: a lifecycle worker may still be
     # committing ownership intent. Failure to stop it leaves the journal alone.
     if "admission_protocol" in data:
-        data = admission.close(store, run_id)
+        from .cooperative_stop import drain_mutations
+
+        # Closing admission alone is not a cancellation barrier. A normal Stop
+        # must let the admitted create finish and seal before stopping sessions.
+        data = drain_mutations(store, run_id)
     stop_workers(data)
     if data.get("mutation_protocol") == "sealed-v1":
         cleanup_sealed_locked(store, run_id)
