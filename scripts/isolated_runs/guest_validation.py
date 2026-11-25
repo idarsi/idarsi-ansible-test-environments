@@ -75,6 +75,8 @@ def binding(data: dict, args: argparse.Namespace) -> None:
         not isinstance(operations, list) or not operations
         or not all(isinstance(op, dict) for op in operations)
         or operations[0].get("action") != "create"
+        # A cooperative stopped seal permits cleanup, not guest readiness.
+        or operations[0].get("outcome") == "stopped"
         or any(op.get("action") not in ACTIONS for op in operations[1:])
         or any(not isinstance(op.get("id"), str) or not op["id"] for op in operations)
         or len({op["id"] for op in operations}) != len(operations)

@@ -281,3 +281,17 @@ independently of venv location; dependency bootstrap resolves the real ephemeral
 collections directory before create. Direct retained guests are not safe for
 same-context concurrent use. Incomplete mutations retain resources and leases
 with inspection-only recovery. The legacy launcher guidance below is unchanged.
+
+For ordinary supervised Stop, the helper first closes admission and waits up to
+120 seconds for an active host mutation to finish and seal before signalling
+workers. This prevents cancellation itself from cutting a healthy create short.
+It does not repair an already incomplete mutation or prove cancellation of a
+libvirt daemon request. See [cooperative supervised stop](isolated-test-runs.md#cooperative-supervised-stop)
+for timeout, exact-run retry and verification limits.
+
+Guest OS installation/SSH polling is cooperatively stoppable after the host
+commands have completed. The worker seals `outcome: stopped` (not a ready guest
+or passed test); the supervisor then stops workers and hard-powers-off exact
+owned VMs through `virsh destroy UUID` before deleting their private disks and
+network. It does not kill the supervisor or signal unrelated QEMU processes.
+Failed/uncertain host commands remain blocked, not converted into stop seals.

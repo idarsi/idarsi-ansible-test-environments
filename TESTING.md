@@ -77,6 +77,57 @@ this documentation-only update and any publication commit. Helper publication,
 consumer pin update and CI against the published source remain pending; no
 release-readiness or unpublished-pin CI claim is made.
 
+## Cooperative supervised stop checks
+
+With an existing approved controller, run:
+
+```bash
+python -B -m unittest discover -s tests -p 'test_isolated_cooperative_stop*.py' -v
+```
+
+The private temporary-journal unit fixtures invoke no backend tools or processes.
+They verify admission closure before a busy resource-lock wait, completion seal
+before any worker signal, missing/invalid seal refusal, timeout without signals
+or deletion, failed gate/unsafe lock refusal, peer preservation and retry after
+the original mutation seals. Existing admission and supervised-seal tests remain
+regressions for denied late lifecycle entry, actual cleanup sealing and retained
+uncertain operations.
+
+`test_isolated_cooperative_stop_processes.py` adds tester-owned fixtures with
+only disposable Python sessions: real admission/resource locks, durable seal
+before actual session TERM, queued admission refusal, timeout without signals,
+and missing-seal refusal. Their backend cleanup is mocked; all exact child
+processes are terminated/reaped in `finally`. They require Linux pidfd support.
+Real KVM stop-during-create/destroy plus concurrent-peer acceptance remains
+tester-owned and unverified; these fixtures are not a backend cancellation barrier.
+
+`test_isolated_create_stop.py` checks closed-gate create checkpoints and the
+worker-bound `outcome: stopped` seal with fake backends. Ready instances are not
+published; mismatched identity/checkpoint/worker, open gate, uncertain host RPC
+and completion-write failure remain incomplete. A mocked KVM provisioner check
+closes admission just after successful `virt-install` and verifies cancellation
+before SSH polling; a start timeout never becomes a stopped-create seal.
+`test_isolated_create_stop_processes.py` exercises the checkpoint-to-cleanup
+path with real disposable Python sessions, gated cleanup worker and journal:
+the stopped seal precedes session termination, guest/network cleanup and
+`cleaned` publication. A second fixture executes the real backend teardown
+method against mocked libvirt queries and a private temporary disk, asserting
+exact-UUID hard destroy before undefine/unlink and preservation of a foreign
+peer. Neither fixture starts or signals a real VM.
+
+```bash
+python -B -m unittest discover -s tests -p 'test_isolated_create_stop*.py' -v
+```
+
+The combined `test_isolated_guest_proof_control.py` private fixtures additionally
+verify that every stopped-create checkpoint remains drainable but is never a
+successful-create proof, even with stale ready mappings. Interrupted creates
+with absent resource intents still refuse drain/proof rather than becoming
+clean. Closed admission after completed create/guest-control history also
+refuses proof. These checks preserve manifest, mapping, admission, worker lists
+and filesystem metadata; they invoke no backend processes. Earlier native
+acceptance above does not cover this cooperative-stop integration.
+
 ## Interrupted network-tail recovery checks
 
 Use an already activated approved shared controller; do not create a worktree

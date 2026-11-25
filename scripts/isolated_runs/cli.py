@@ -65,7 +65,7 @@ def validate_configuration(data, source):
 
 
 def cleanup_locked(store: Store, run_id: str) -> None:
-    """Caller owns the supervisor lock; stop workers before resource mutation."""
+    """Caller owns supervisor; drain admitted mutations, stop workers, then clean."""
     data = store.load(run_id)
     if data["status"] == "cleaned":
         return
@@ -84,7 +84,11 @@ def cleanup_locked(store: Store, run_id: str) -> None:
     # Do not write even a status here: a lifecycle worker may still be
     # committing ownership intent. Failure to stop it leaves the journal alone.
     if "admission_protocol" in data:
-        data = admission.close(store, run_id)
+        from .cooperative_stop import drain_mutations
+
+        # Closing admission alone is not a cancellation barrier. A normal Stop
+        # must let the admitted create finish and seal before stopping sessions.
+        data = drain_mutations(store, run_id)
     stop_workers(data)
     if data.get("mutation_protocol") == "sealed-v1":
         cleanup_sealed_locked(store, run_id)
@@ -190,7 +194,16 @@ def lifecycle(store: Store, action: str, run_id: str) -> None:
                     "id": operation_id, "action": "create", "worker": worker,
                 })
                 store.save(data)
-            instances = Backend(store, data).create(data["config"]["platforms"])
+            from .cooperative_stop import CreateStopped, seal_stopped_create
+
+            try:
+                instances = Backend(store, data).create(data["config"]["platforms"])
+            except CreateStopped as stopped:
+                seal_stopped_create(store, run_id, operation_id, stopped)
+                raise RunError(
+                    "Create stopped cooperatively before readiness; "
+                    "the supervisor will clean the owned resources"
+                ) from stopped
             from .context import mapping
 
             mapping({"ephemeral_directory": expected["ephemeral"]}, instances)

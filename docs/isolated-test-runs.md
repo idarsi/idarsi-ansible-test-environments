@@ -439,6 +439,70 @@ absence of `mutation_protocol` selects that legacy path; no operation seals or
 provenance are backfilled or required for old supervised journals. An explicit
 unsupported protocol version fails closed rather than selecting legacy recovery.
 
+### Cooperative supervised stop
+
+For `session-v1` / `sealed-v1` supervised runs, supervisor stop now closes
+admission **before signalling workers**, then allows an already admitted host
+mutation up to **120 seconds** to finish. The resource lock spans its backend
+commands and durable completion seal. The supervisor acquires that lock and
+checks every seal before stopping the journalled sessions. A helper queued at
+the closed admission boundary cannot start a new mutation. Ordinary cleanup then
+uses the existing separately journalled destroy worker, verifies empty sessions
+and releases the allocation only after durable `cleaned` publication.
+
+This avoids deliberately interrupting a healthy host create merely because the
+user stopped a test during provisioning. Guest tasks need not finish: after the
+host-mutation boundary is settled, the supervisor stops their admitted sessions
+and cleans its exact owned resources. Direct/legacy generations without the
+supervised admission protocol keep their previous contracts.
+
+In particular, a KVM guest's OS installation and SSH-readiness polling are not
+host RPC completion barriers. A supervised create checks the closed gate before
+network creation, between guests and at each readiness-loop boundary after
+successful host commands. At these checkpoints only, the original admitted
+worker can seal its operation with `outcome: stopped` and the exact checkpoint.
+It publishes no ready-instance mapping or `instances_ready` result and returns
+an error to Molecule. This means the host mutation has settled sufficiently for
+supervisor cleanup, **not** that the guest installation or test passed. A timed
+out/failed libvirt call, disk/fsync failure or failed seal write cannot use this
+path. Ordinary completion seals and historical incomplete operations are not
+rewritten.
+
+After those workers are quiescent, cleanup hard-powers-off each **exact owned**
+running VM with `virsh destroy UUID`, undefines it, verifies/removes its private
+disks and then removes its unshared run network. This is the libvirt-controlled
+equivalent of a forced guest poweroff: it does not wait for guest shutdown or
+send raw PID signals to an arbitrary QEMU. Shared images and foreign domains/
+networks are not deletion targets. Failed ownership/dependency checks or backend
+errors retain evidence and the allocation rather than claiming a clean exit.
+
+If the drain deadline expires, no worker signals or resource deletion are
+attempted by that cleanup invocation, and the allocation remains retained. The
+original mutation may still finish normally. After it completes, retry
+`scripts/test-run cleanup RUN_UUID` in the original approved controller/helper
+context. An optional client's separate admission record may be acknowledged only
+after fresh canonical inspection proves `cleaned`; process exit alone is not
+that proof.
+The 120-second deadline bounds resource-lock contention, not admission-lock
+acquisition or kernel-blocked filesystem operations. A caller's overall
+supervisor wait can still expire; it must retain the allocation and report
+unconfirmed work instead of killing the supervisor to force a result.
+
+**This is not cancellation or reconciliation of an uncertain libvirt RPC.**
+A failed/interrupted mutation, missing or invalid seal, daemon timeout, storage
+failure or host crash still refuses ordinary cleanup. Historical incomplete
+generations are not rewritten or automatically released. The narrow existing
+network-tail recovery remains separate; there is no new force-clear, arbitrary
+UUID/name-based deletion or blanket recovery of incomplete creates.
+
+Private-journal unit fixtures cover gate/lock ordering, draining and timeout,
+seal/write/lock failures, peer isolation and exact-run retry. Additional private
+owned-Python-session fixtures exercise actual admission, locks, sealing and
+session TERM, with backend cleanup mocked. These are not real-libvirt acceptance
+results; cancellation during a real create/destroy, parallel-run preservation and
+backend/host faults still require tester-owned acceptance before claiming verified
+runtime support.
+
 ### Supervised tool sessions and closeable admission
 
 New supervised runs additionally declare `admission_protocol: session-v1`.
@@ -468,9 +532,10 @@ Mapping-only supervised destroy also refuses a closed gate.
 
 Cleanup (including cancellation) holds the generation supervisor lock, closes
 admission durably, takes its latest worker snapshot under admission, releases
-admission, and only then signals/waits for the registered sessions. It never
-holds admission while waiting for resources or workers, nor resources while
-quiescing them. A registrar already holding admission must commit before the
+admission, then drains the resource-lock/completion-seal boundary before
+signalling/waiting for the registered sessions. It never holds admission while
+waiting for resources or workers, nor resources while quiescing them.
+A registrar already holding admission must commit before the
 close snapshot; a registrar waiting on resources finds the gate closed and
 cannot add a mutation afterward. After quiescence, resource locking and the
 existing completion-seal barrier apply.

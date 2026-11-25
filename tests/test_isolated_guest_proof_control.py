@@ -9,7 +9,7 @@ from unittest.mock import patch
 import uuid
 
 import test_isolated_guest_validation as fixture
-from isolated_runs import admission, guest_control, guest_validation as guest
+from isolated_runs import admission, cooperative_stop, guest_control, guest_validation as guest
 from isolated_runs.backends import kvm_instance
 from isolated_runs.guest_refusal import GuestRefusal
 from isolated_runs.state import atomic_json
@@ -100,6 +100,83 @@ class CombinedProofTests(unittest.TestCase):
             admission, "registered_current", side_effect=AssertionError("registration forbidden"),
         ):
             self.roundtrip()
+
+    def test_cooperative_stop_drain_never_turns_stopped_create_into_guest_proof(self):
+        self.supervised()
+        original = copy.deepcopy(self.data)
+        for checkpoint in ("before-network", "before-guest", "guest-readiness"):
+            for ready in (False, True):
+                with self.subTest(checkpoint=checkpoint, stale_ready_mapping=ready):
+                    self.data = copy.deepcopy(original)
+                    self.data["operations"][0].pop("completion")
+                    self.store.save(self.data)
+                    with patch.object(admission, "registered_current", return_value=self.data["workers"][0]):
+                        admission.close(self.store, self.run_id)
+                        cooperative_stop.seal_stopped_create(
+                            self.store, self.run_id, "op",
+                            cooperative_stop.CreateStopped(self.run_id, checkpoint),
+                        )
+                    self.data = self.store.load(self.run_id)
+                    self.assertNotIn("instances_ready", self.data)
+                    self.assertEqual("running", self.data["status"])
+                    if ready:
+                        # Even a stale mapping and independently readable open
+                        # gate cannot promote a stopped seal to successful create.
+                        self.data["instances_ready"] = copy.deepcopy(self.instances)
+                        self.store.save(self.data)
+                        atomic_json(self.store.directory(self.run_id) / "admission.json",
+                                    {"version": 1, "id": self.run_id, "state": "open"})
+                        before = self.snapshot()
+                        with self.ancestry(), patch.object(
+                            admission, "registered_current", side_effect=AssertionError("registration forbidden"),
+                        ), self.assertRaises(GuestRefusal) as refused:
+                            self.invoke()
+                        self.assertEqual("NATIVE_IDENTITY", refused.exception.code)
+                        self.assertEqual(before, self.snapshot())
+                    drained = cooperative_stop.drain_mutations(self.store, self.run_id)
+                    self.assertEqual(self.data, drained)
+                    before = self.snapshot()
+                    with self.ancestry(), patch.object(
+                        admission, "registered_current", side_effect=AssertionError("registration forbidden"),
+                    ), self.assertRaises(GuestRefusal):
+                        self.invoke()
+                    self.assertEqual(before, self.snapshot())
+                    # Check the history boundary independently of closed admission.
+                    with self.assertRaises(GuestRefusal):
+                        guest.binding(self.data, self.args)
+
+    def test_drain_refuses_interrupted_create_without_inferring_absence_is_clean(self):
+        self.supervised()
+        self.data["operations"][0].pop("completion")
+        self.data.pop("instances_ready")
+        self.data["guests"] = []
+        self.data["network"] = None
+        self.store.save(self.data)
+        admission.close(self.store, self.run_id)
+        before = self.snapshot()
+        with self.assertRaisesRegex(fixture.RunError, "Incomplete mutation"):
+            cooperative_stop.drain_mutations(self.store, self.run_id)
+        with self.ancestry(), self.assertRaises(GuestRefusal):
+            self.invoke()
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual("running", self.store.load(self.run_id)["status"])
+        self.assertEqual([], self.queries)
+
+    def test_closed_admission_after_successful_create_refuses_proof_read_only(self):
+        self.supervised()
+        self.data["operations"].extend([
+            self.operation("guest-stop"), self.operation("guest-start"),
+        ])
+        self.store.save(self.data)
+        cooperative_stop.drain_mutations(self.store, self.run_id)
+        before = self.snapshot()
+        with self.ancestry(), patch.object(
+            admission, "registered_current", side_effect=AssertionError("registration forbidden"),
+        ), self.assertRaises(GuestRefusal) as refused:
+            self.invoke()
+        self.assertEqual("AUTHORITY_PARSE", refused.exception.code)
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual([], self.queries)
 
     def test_completed_noops_and_other_guest_history_do_not_invalidate_target(self):
         platform = {**self.config["platforms"][0], "name": "peer"}
