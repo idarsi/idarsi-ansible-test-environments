@@ -108,12 +108,16 @@ def resolved(args: argparse.Namespace, store: Store, *, existing_config=None, _e
     ):
         if os.environ.get(key) and Path(os.environ[key]).resolve() != expected:
             raise RunError("Molecule project/scenario directory binding mismatch")
+    from .diagnostics import DIGEST
+
     result = {
         "schema": SCHEMA, "mode": "direct", "role": str(role),
         "scenario": args.scenario, "backend": args.backend,
         "ephemeral_directory": str(ephemeral),
         "collections_directory": str(ephemeral / "collections"), "generation": None,
         "lifecycle_modes": ["direct", "supervised"], "effective_config_validated": True,
+        "failure_diagnostics": ["failure_diagnostics:v1"],
+        "failure_diagnostics_profiles": {"systemd-failed-v1": DIGEST},
     }
     if args.backend == "kvm":
         result.update(

@@ -1,5 +1,17 @@
 # Idarsi Ansible Test Environments
 
+Optional supervised failure diagnostics are **default off**:
+`scripts/test-run run --backend kvm --scenario example --failure-diagnostics ROLE`.
+The fixed `systemd-failed-v1` profile retains bounded failed-service properties
+and current-boot journal excerpts **before supervisor-owned deletion**, not
+before every scenario cleanup action. It never changes the original failure
+exit or grants cleanup authority. No role metadata, installation or privilege
+fallback is needed. **Best-effort redaction is not a secrecy guarantee; KVM
+provisioning SSH does not authenticate host keys.**
+See the [v1 capability, lifecycle, trust and artifact contract](docs/isolated-test-runs.md#optional-failure-diagnostics-v1).
+The final reviewed helper publication SHA, TUI consumer pin and native
+acceptance are pending; earlier runtime results below do not cover this feature.
+
 Experimental concurrent-run isolation is available through
 [`scripts/test-run`](docs/isolated-test-runs.md). It uses per-run networks,
 subnets and identity-checked cleanup. It is opt-in; legacy commands are

@@ -1,5 +1,114 @@
 # Shared direct and supervised test runs (experimental)
 
+## Optional failure diagnostics v1
+
+`test-run run --failure-diagnostics` explicitly selects the only supported
+profile, `systemd-failed-v1`; omission is fully backward compatible and default
+off. No arbitrary profiles/commands or role metadata are accepted. The matching
+GUI requires explicit risk acceptance in each immutable run preview; CLI help
+discloses the same privacy and KVM SSH risks.
+
+Scenario-context advertises:
+
+```json
+{
+  "failure_diagnostics": ["failure_diagnostics:v1"],
+  "failure_diagnostics_profiles": {"systemd-failed-v1": "PROFILE_SHA256"}
+}
+```
+
+`PROFILE_SHA256` is SHA256 of Python's canonical `json.dumps(POLICY,
+sort_keys=True).encode()` in `isolated_runs/diagnostics.py`, matched by the
+consumer's identical fixed policy. The immutable preview and persisted cell/run
+context include profile/digest. Requesting collection from an old/mismatched
+helper must fail before test-worker launch; do not silently fall back. Publish
+the reviewed helper first, then record its final commit SHA in consumer pins;
+that SHA/pin update is intentionally pending review. No role-repository edits,
+new environment or dependency installation are part of this feature.
+
+### Supervisor ordering and failure semantics
+
+After an **ordinary nonzero** original Molecule exit (not success, signal death
+or operator cancellation), the supervisor:
+
+1. Preserves the original exit; closes/drains mutation admission and verifies
+   sealed mutations using the existing cleanup barriers.
+2. Settles the original registered worker's entire local host session. Unknown
+   local settlement retains the existing guards/resources/lease.
+3. Snapshots durable `instances_ready`-bound owned guest IDs into the diagnostic
+   request. Supervised Molecule destroy can already have cleared the disposable
+   instance mapping: the final inventory is never the source of target identity.
+4. Starts one separately journalled/gated **read-only** diagnostic worker using
+   existing process ownership. Its authorization does **not** reopen mutation
+   admission or append a fake mutation completion seal.
+5. Settles every local diagnostic session/transport before normal cleanup,
+   preserving all existing cleanup ownership/absence checks. Cancellation starts
+   no new collector; accepted work is settled before cleanup.
+
+No ready create means no collection. Collection/persistence failure is nonfatal
+to the original failure exit and does not authorize or suppress cleanup.
+Remote read-only completion is separate from local settlement: timeouts are
+partial, `remote_completion: unknown`, not remote quiescence claims. Once host
+workers are settled, existing guarded cleanup can delete already-owned guests
+without remote command exit proof. The guarantee is only **before supervisor
+resource deletion**, not before every playbook/scenario cleanup action.
+
+### Fixed collector and transport boundaries
+
+The fixed trusted guest Python helper receives only structured stdin variables.
+No `shell=True`, local shell interpolation or unit arguments embedded in remote
+shell text. The SSH remote command is a fixed string; Podman receives argv.
+Discovery is limited to four failed systemd services with unit names matching
+`[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}\.service`. Unsupported names are skipped.
+Only `Id`, `LoadState`, `ActiveState`, `SubState`, `Result`, `ExecMainCode` and
+`ExecMainStatus` are read using `systemctl show`. Journals are selected-unit,
+current-boot only, from validated run start through collection time, at most
+100 lines/service. No `systemctl status`, Environment/ExecStart, full journals,
+file tails, AVCs or PID contexts in v1.
+
+Budgets: 64 KiB/item, 1 MiB total durable report, 30 seconds total collection,
+five seconds per operation, guest `timeout --signal=TERM --kill-after=2s 5s`,
+bounded local pipes/remaining deadline. Missing Python/timeout/systemd or journal
+permissions produce unavailable/partial evidence, never installs, sudo,
+privilege escalation or a fallback transport.
+
+Rootless Podman validates the pinned local context, **full container ID** and
+ownership label; names are not a fallback. KVM validates recorded domain UUID
+and run ownership metadata, then the ready provisioning address/user/key.
+It reuses existing provisioning SSH trust only:
+`StrictHostKeyChecking=no`, `UserKnownHostsFile=/dev/null`. **This does NOT
+authenticate the host key.** Evidence is attributed to a recorded target, not
+cryptographically verified. Agent/X11 forwarding and connection sharing are
+disabled, with noninteractive connection timeouts. No new host-key binding,
+QEMU-agent route or host privilege is introduced.
+
+### Retained evidence is never cleanup authority
+
+Artifacts remain after guest cleanup under the private run journal:
+`RUN_UUID/diagnostics/systemd-failed-v1.json` (`0700` directories, exclusive
+no-follow `0600` file). Redaction and terminal sanitization precede all evidence
+persistence/UI use, including failure details; raw transport stderr is discarded.
+**Redaction is best effort. Journals can contain unrecognized secrets.** Opt in
+only when that risk is acceptable.
+
+The bounded manifest binds helper revision/tool/collector identity, fixed profile
+digest, run UUID, role revision+dirty state, logical guest/exact backend ID,
+timestamps, original exit, item status/truncation, transport trust
+(`provisioning_ssh_unverified_host_key` or `owned_local_podman`) and remote
+completion (`observed`, `unknown`, `not_started`). Unavailable Git provenance is
+explicitly null, never invented. A concise worker-log artifact reference is not
+an instruction to open arbitrary paths. The TUI derives the fixed private path,
+rejects symlinks/traversal/nonregular/shared/oversized/malformed artifacts, verifies
+request/owned-target provenance, and retains a separately sanitized report at the
+exact campaign/cell/execution token. Reports never grant cleanup authority.
+Already cleaned guest evidence is unrecoverable; this is not retrospective
+collection.
+
+Verification is limited to focused mocked unit tests; no native diagnostics,
+backend probe, guest connection or campaign has been authorized or run for v1.
+Existing lifecycle acceptance records elsewhere in this document do not cover
+these new diagnostics.
+
 ## Interrupted network-tail recovery
 
 Use the **original canonical helper and original activated controller**, never

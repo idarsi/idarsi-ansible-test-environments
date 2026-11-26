@@ -265,6 +265,13 @@ def run(args, store: Store) -> int:
     config["platforms"] = validate_platforms(
         args.backend, config.get("platforms"), role / "molecule" / args.scenario,
     )
+    diagnostic_source = None
+    if getattr(args, "failure_diagnostics", False):
+        from . import diagnostics
+
+        # Bound local provenance reads before allocating any resources/lease,
+        # rather than extending the pre-handler allocated-supervisor window.
+        diagnostic_source = diagnostics.source_identity(role)
     context = {"podman": podman_context(), "libvirt": "qemu:///system"}
     data = store.allocate(args.backend, context, discover, role, args.scenario)
     run_id = data["id"]
@@ -284,6 +291,14 @@ def run(args, store: Store) -> int:
         data["mutation_protocol"] = "sealed-v1"
         data["operations"] = []
         data["admission_protocol"] = admission.PROTOCOL
+        if getattr(args, "failure_diagnostics", False):
+            from . import diagnostics
+
+            data["failure_diagnostics"] = {
+                "profile": diagnostics.PROFILE, "profile_digest": diagnostics.DIGEST,
+                "started_at": diagnostics.now(), "state": "requested",
+                "source": diagnostic_source,
+            }
         admission.initialize(store, run_id)
         store.save(data)
         environment.update(
@@ -319,6 +334,22 @@ def run(args, store: Store) -> int:
                 if result < 0:
                     result = 128 - result
         finally:
+            if (getattr(args, "failure_diagnostics", False) and child is not None
+                    and child.returncode is not None and child.returncode > 0 and not cancelled):
+                from .diagnostics import collect_before_cleanup
+
+                try:
+                    collect_before_cleanup(store, run_id, child.returncode, lambda: bool(cancelled))
+                except Exception:
+                    # Never expose raw backend output or make evidence a cleanup
+                    # dependency. Ordinary cleanup rechecks all safety barriers.
+                    try:
+                        print("Failure diagnostics unavailable; original exit and cleanup preserved.",
+                              file=sys.stderr, flush=True)
+                    except OSError:
+                        pass  # A closed diagnostic sink cannot suppress cleanup.
+            if cancelled:
+                result = 128 + cancelled[0]
             try:
                 cleanup_locked(store, run_id)
             except (RunError, OSError, ValueError, KeyError, TypeError) as exc:
@@ -355,6 +386,12 @@ def main(argv=None) -> int:
     start = commands.add_parser("run", help="Run the full Molecule test sequence")
     start.add_argument("--backend", choices=("kvm", "podman"), required=True)
     start.add_argument("--scenario", required=True)
+    start.add_argument(
+        "--failure-diagnostics", action="store_true",
+        help=("Opt in to systemd-failed-v1 before supervisor resource deletion. "
+              "Best-effort redaction; journals may contain secrets. KVM provisioning SSH "
+              "does NOT authenticate the host key. Default off; no installs or escalation."),
+    )
     start.add_argument("role", nargs="?", default=".", help="Role checkout (default: cwd)")
     commands.add_parser("list")
     for name in ("inspect", "cleanup"):
@@ -384,6 +421,9 @@ def main(argv=None) -> int:
     internal = commands.add_parser("_lifecycle", help="Internal synchronous lifecycle adapter")
     internal.add_argument("action", choices=("create", "destroy"))
     internal.add_argument("run_id")
+    diagnostic = commands.add_parser("_diagnostics", help=argparse.SUPPRESS)
+    diagnostic.add_argument("run_id")
+    diagnostic.add_argument("attempt")
     args = parser.parse_args(argv)
     os.umask(0o077)
     if args.command == "recover-destroy":
@@ -436,6 +476,16 @@ def main(argv=None) -> int:
             cleanup(store, args.run_id)
         elif args.command == "_lifecycle":
             lifecycle(store, args.action, args.run_id)
+        elif args.command == "_diagnostics":
+            from .diagnostics import worker
+
+            try:
+                worker(store, args.run_id, args.attempt)
+            except Exception:
+                # Diagnostic boundary intentionally hides all payloads and
+                # exception details; failure never changes lifecycle authority.
+                print("Failure diagnostics unavailable.", file=sys.stderr)
+                return 1
         else:
             failed = False
             for data in store.runs():

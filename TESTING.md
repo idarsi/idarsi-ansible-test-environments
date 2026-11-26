@@ -1,5 +1,23 @@
 # Testing
 
+## Failure diagnostics v1 (mocked only)
+
+With the existing approved current controller, the focused developer check is:
+
+```sh
+.venv/ansible-current/bin/python -B -m unittest discover -s tests \
+  -p 'test_isolated_failure_diagnostics.py' -v
+```
+
+It mocks all backend, guest, process/signal and collection boundaries. Private
+disposable state checks cover ordering, sealed admission, original-exit
+preservation, skip/cancel paths, durable ready multihost targets, exact Podman/KVM
+ownership and transport arguments, bounded hanging/output cases, sanitization
+before private artifact writes and unchanged cleanup delegation.
+This does not establish native/backend acceptance. No new environments or
+dependencies are installed; the tester owns broader mocked/runtime matrices.
+See the [v1 contract](docs/isolated-test-runs.md#optional-failure-diagnostics-v1).
+
 ## Existing-generation guest proof
 
 With an already activated approved controller and this checkout's helper binding:
