@@ -31,12 +31,42 @@ This isolates trusted dependency output, not hostile code: fork-only descendants
 can inherit descriptors until exec, and deliberate descriptor passing is outside
 this boundary.
 
-These checks qualify this fix's source only; they do not identify the exact raw
-output that caused the historical malformed-JSON failures. Runtime revalidation
-is planned and tester-owned: only the two previously failed ansible-current
-nginx cells (`kvm-rocky9-check-mode` create and guardrails destroy). No prior
-runtime acceptance below is evidence for this uncommitted fix; no new backend
-pass, shared environment change or dependency installation is claimed.
+### Bounded runtime acceptance — 2026-11-27
+
+Tester-owned campaign **351**, **06:43:14–06:51:34 UTC**, passed with CLI exit 0
+on ansible-current: Python 3.12.16, Ansible Core 2.20.8 and Molecule 26.8.0.
+A real Config bridge probe also passed beforehand. Exact tested sources:
+
+| Component | Tested revision |
+| --- | --- |
+| Helper (clean checkout) | `7fc510d05cfce04e6dc60d70285e8ed9eee725e5` |
+| TUI | `5454b4cd1199c9faf7bec997250ce2b05bd3d8b0` |
+| nginx role (`update/optional-managed-molecule`) | `2c855f7e2e17a48c02d7aeedf2f5aba223706af2` |
+
+Only the two previously failed nginx cells were authorized and rerun, each as a
+whole scenario:
+
+| Cell | Result |
+| --- | --- |
+| `kvm-rocky9-check-mode` (previous create failure) | Create/converge/idempotence/verify/destroy passed; original worker exit 0. |
+| Guardrails (previous destroy failure) | Create/converge/idempotence/verify/destroy passed; original worker exit 0. |
+
+Independent inspections of both original contexts confirmed `cleaned`, all
+mutations sealed, zero live workers, empty guests and no network. Post-run
+admission was empty. Diagnostics were enabled; successful runs correctly
+triggered no failure reports, so this is not runtime evidence for report capture.
+
+Campaign 350 was interrupted by a two-minute harness background timeout and
+cleaned before replacement campaign 351; it is neither a code failure nor an
+additional pass. The monolithic-libvirtd setup-host check was an explicitly
+accepted false negative with working modular libvirt, not an overall host-check
+pass. The other 14 previously passing cells, ansible-next and the full suite were
+not rerun. No environment changes or dependency installations were made.
+
+This evidence belongs to helper revision `7fc510d05cfce04e6dc60d70285e8ed9eee725e5`,
+not the later documentation commit. The exact historical campaign-348 trigger
+bytes remain unknown; these passes do not establish a particular warning as
+the cause of its malformed-JSON failures.
 
 ## Failure diagnostics v1 (mocked only)
 
