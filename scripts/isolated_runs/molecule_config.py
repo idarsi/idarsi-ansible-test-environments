@@ -27,25 +27,44 @@ if __name__ == "__main__" and "--existing-only" in sys.argv:
         raise SystemExit(1) from None
     raise SystemExit(0)
 
-from molecule.config import Config
-from molecule.shell import LOCAL_CONFIG
+_diagnostics = None
 
 
 def reject(message):
-    # Molecule configures console streams on import. Keep guard diagnostics on
-    # the original error stream, without dumping the potentially secret config.
-    print(message, file=sys.__stderr__)
+    diagnostic(message)
     raise SystemExit(1)
 
 
-class ManagedConfig(Config):
-    """Reject shared-state dispatch before Molecule resolves the default scenario."""
+def diagnostic(message):
+    """Emit only caller-owned finite reasons, never dependency exception text."""
+    try:
+        print(message, file=_diagnostics or sys.__stderr__, flush=True)
+    except (OSError, ValueError):
+        pass
 
-    def _get_config(self):
-        data = super()._get_config()
-        if data.get("shared_state") or data.get("scenario", {}).get("shared_state"):
-            reject("Managed runs reject shared_state configuration")
-        return data
+
+def load_config(source):
+    """Import Molecule only inside the already isolated child."""
+    from molecule.config import Config
+    from molecule.shell import LOCAL_CONFIG
+
+    class ManagedConfig(Config):
+        """Reject shared-state dispatch before default-scenario resolution."""
+
+        def _get_config(self):
+            data = super()._get_config()
+            if data.get("shared_state") or data.get("scenario", {}).get("shared_state"):
+                reject("Managed runs reject shared_state configuration")
+            return data
+
+    return ManagedConfig(
+        source,
+        args={
+            "base_config": [LOCAL_CONFIG] if LOCAL_CONFIG else [],
+            "env_file": os.environ.get("MOLECULE_ENV_FILE", ".env.yml"),
+        },
+        command_args={"parallel": False},
+    )
 
 
 def main():
@@ -55,14 +74,7 @@ def main():
     args = parser.parse_args()
     if args.supervised:
         validate_controller()
-    config = ManagedConfig(
-        args.source,
-        args={
-            "base_config": [LOCAL_CONFIG] if LOCAL_CONFIG else [],
-            "env_file": os.environ.get("MOLECULE_ENV_FILE", ".env.yml"),
-        },
-        command_args={"parallel": False},
-    )
+    config = load_config(args.source)
     if not hasattr(config, "config_data"):
         config.after_init()
         data = config.config
@@ -80,10 +92,37 @@ def main():
         if key in os.environ:
             environment[key] = os.environ[key]
     data["_idarsi_effective_env"] = environment
-    # Molecule may replace console streams during configuration. Keep the
-    # machine response on the original stream and flush before interpreter exit.
-    sys.__stdout__.write(json.dumps(data) + "\n")
-    sys.__stdout__.flush()
+    return data
+
+
+def child_main():
+    """Own private protocol descriptors; discard all ordinary dependency output."""
+    global _diagnostics
+    try:
+        with os.fdopen(os.dup(2), "w") as errors:
+            # os.dup returns non-inheritable descriptors. Only these wrappers own
+            # the duplicates; trusted exec children receive neither protocol FD.
+            _diagnostics = errors
+            try:
+                with os.fdopen(os.dup(1), "wb") as response:
+                    sink = os.open(os.devnull, os.O_WRONLY)
+                    try:
+                        os.dup2(sink, 1)
+                        os.dup2(sink, 2)
+                    finally:
+                        os.close(sink)
+                    # Never restore FD 1/2: buffered streams, atexit handlers and
+                    # exec children stay on the sink during interpreter shutdown.
+                    payload = (json.dumps(main()) + "\n").encode("utf-8")
+                    response.write(payload)
+                    response.flush()
+            except Exception:
+                diagnostic("config_bridge_failed")
+                return 1
+        return 0
+    except Exception:
+        diagnostic("config_bridge_failed")
+        return 1
 
 
 def validate_controller():
@@ -117,4 +156,4 @@ def validate_controller():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(child_main())

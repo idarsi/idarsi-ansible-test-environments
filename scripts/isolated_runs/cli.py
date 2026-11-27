@@ -33,9 +33,13 @@ def parse_configuration(role: Path, scenario: str, environment: dict, direct: bo
         )
         try:
             data = json.loads(response)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as error:
             reason = "empty" if not response.strip() else "malformed"
-            raise RunError("Molecule config bridge returned " + reason + " JSON response") from None
+            raise RunError(
+                "Molecule config bridge returned " + reason + " JSON response "
+                f"(category={reason}, chars={len(response)}, pos={error.pos}, "
+                f"line={error.lineno}, column={error.colno})"
+            ) from None
     return validate_configuration(data, source)
 
 

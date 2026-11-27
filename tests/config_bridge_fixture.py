@@ -36,11 +36,12 @@ def main():
     spec.loader.exec_module(bridge)
     sys.argv = [str(source), *sys.argv[2:]]
     with patch.object(bridge, "validate_controller", autospec=True) as policy:
-        bridge.main()
+        result = bridge.child_main()
         if "--supervised" in sys.argv:
             policy.assert_called_once_with()
         else:
             policy.assert_not_called()
+        raise SystemExit(result)
 
 
 if __name__ == "__main__":

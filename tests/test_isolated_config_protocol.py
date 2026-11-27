@@ -22,6 +22,7 @@ PRIVATE = "fixture-credential /private/fixture/config.yml"
 INVALID = (
     "", " \n\t ", PRIVATE, "warning " + PRIVATE + "\n{}",
     "{}\ntrailing " + PRIVATE, '{"credential":"' + PRIVATE + '",',
+    "\ufeff{}", "\x1b[31m{}\x1b[0m",
 )
 
 
@@ -46,17 +47,35 @@ class ConfigProtocolTests(unittest.TestCase):
                 with self.assertRaises(RunError) as caught:
                     cli.parse_configuration(self.role, "kvm-fixture", self.environment)
                 reason = "empty" if not response.strip() else "malformed"
-                self.assertEqual(str(caught.exception), "Molecule config bridge returned " + reason + " JSON response")
+                self.assertRegex(str(caught.exception), self.diagnostic_pattern(reason, len(response)))
                 self.assertTrue(caught.exception.__suppress_context__)
                 self.assertIsNone(caught.exception.__cause__)
                 self.assertNotIn(PRIVATE, str(caught.exception))
                 command.assert_called_once()
+
+    @staticmethod
+    def diagnostic_pattern(reason, length):
+        return (
+            "^Molecule config bridge returned " + reason + " JSON response "
+            + r"\(category=" + reason + ", chars=" + str(length)
+            + r", pos=\d+, line=\d+, column=\d+\)$"
+        )
 
     def test_warning_prefix_or_extra_json_document_is_not_salvaged(self):
         for response in ("warning\n" + json.dumps(self.valid), json.dumps(self.valid) + "\n{}"):
             with patch.object(cli, "command", return_value=response) as command, self.assertRaises(RunError):
                 cli.parse_configuration(self.role, "kvm-fixture", self.environment)
             command.assert_called_once()
+
+    def test_parse_position_diagnostics_are_numeric_and_exact(self):
+        with patch.object(cli, "command", return_value='\n  {"x":'):
+            with self.assertRaises(RunError) as caught:
+                cli.parse_configuration(self.role, "kvm-fixture", self.environment)
+        self.assertEqual(
+            str(caught.exception),
+            "Molecule config bridge returned malformed JSON response "
+            "(category=malformed, chars=8, pos=8, line=2, column=8)",
+        )
 
     def test_valid_mapping_and_environment_semantics_unchanged(self):
         for direct in (False, True):
@@ -125,7 +144,10 @@ class ConfigProtocolTests(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(output.getvalue(), "")
                 reason = "empty" if not response.strip() else "malformed"
-                self.assertEqual(errors.getvalue(), "test-run: Molecule config bridge returned " + reason + " JSON response\n")
+                self.assertRegex(
+                    errors.getvalue().removeprefix("test-run: ").rstrip("\n"),
+                    self.diagnostic_pattern(reason, len(response)),
+                )
                 self.assertNotIn(PRIVATE, errors.getvalue())
                 self.assertNotIn("Traceback", errors.getvalue())
                 self.assertEqual(store.mock_calls, [])
@@ -154,11 +176,7 @@ class BridgeBindingTests(unittest.TestCase):
             "fixture_bridge", cli.REPO / "scripts/isolated_runs/molecule_config.py",
         )
         self.bridge = importlib.util.module_from_spec(spec)
-        with patch.dict(sys.modules, {
-            "molecule.config": SimpleNamespace(Config=object),
-            "molecule.shell": SimpleNamespace(LOCAL_CONFIG=None),
-        }):
-            spec.loader.exec_module(self.bridge)
+        spec.loader.exec_module(self.bridge)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -189,15 +207,14 @@ class BridgeBindingTests(unittest.TestCase):
                 patch.object(self.bridge.sys, "prefix", str(prefix)), \
                 patch.object(self.bridge.sys, "base_prefix", str(base_prefix)), \
                 patch.object(self.bridge.sys, "executable", str(executable or prefix / "bin/python3")), \
-                patch.object(self.bridge.sys, "__stdout__", io.StringIO()) as output, \
                 patch.object(self.bridge.sys, "__stderr__", io.StringIO()), \
-                patch.object(self.bridge, "ManagedConfig", return_value=config) as constructor:
+                patch.object(self.bridge, "load_config", return_value=config) as constructor:
             try:
-                self.bridge.main()
+                data = self.bridge.main()
             except SystemExit:
                 constructor.assert_not_called()
                 raise
-        return json.loads(output.getvalue()), config
+        return data, config
 
     def test_actual_current_next_bindings_override_config_without_environment_leak(self):
         for lane in ("ansible-current", "ansible-next"):

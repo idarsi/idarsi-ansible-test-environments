@@ -1,5 +1,43 @@
 # Testing
 
+## Config bridge descriptor isolation
+
+Focused, backend-free developer checks with the existing approved controller:
+
+```sh
+.venv/ansible-current/bin/python -B -m unittest discover -s tests \
+  -p 'test_isolated_config*.py' -v
+```
+
+The production child bootstrap always runs with synthetic Molecule dependencies
+on `sys.executable`, including portable CI checkouts without `.venv`. Installed
+current and next controller interpreters add optional coverage; unavailable lanes
+are explicitly reported as skips, never installed. A patched-availability
+regression proves the mandatory current-interpreter checks still run without
+either controller layout. Private disposable
+fixtures cover import/configuration/shutdown chatter on Python and native streams,
+inherited exec stdout, non-inheritable protocol descriptors, buffered/unbuffered
+and color-mode environments with and without stream replacement (eight mandatory
+combinations), complete JSON serialization, finite failures and a
+closed response pipe. Parent imports remain inert; existing-only dispatch keeps
+its separate read-only refusal protocol. Parser tests retain strict rejection of
+empty, truncated, prefixed and multiple-document responses before allocation.
+Diagnostics expose only category, response character count and JSON error
+position/line/column, never response excerpts or dependency exception text.
+
+Ordinary child stdout **and stderr** are discarded through interpreter shutdown;
+only the reserved response and finite guard/error channels reach the caller.
+This isolates trusted dependency output, not hostile code: fork-only descendants
+can inherit descriptors until exec, and deliberate descriptor passing is outside
+this boundary.
+
+These checks qualify this fix's source only; they do not identify the exact raw
+output that caused the historical malformed-JSON failures. Runtime revalidation
+is planned and tester-owned: only the two previously failed ansible-current
+nginx cells (`kvm-rocky9-check-mode` create and guardrails destroy). No prior
+runtime acceptance below is evidence for this uncommitted fix; no new backend
+pass, shared environment change or dependency installation is claimed.
+
 ## Failure diagnostics v1 (mocked only)
 
 With the existing approved current controller, the focused developer check is:
